@@ -58,12 +58,25 @@ const processImage = async (imageUrl) => {
     const response = await fetch(absoluteUrl);
     const buffer = await response.buffer();
 
+    // Check if the content is SVG or XML
+    const contentType = response.headers.get("content-type");
+    if (
+      contentType &&
+      (contentType.includes("svg") || contentType.includes("xml"))
+    ) {
+      console.log("Skipping SVG/XML image:", imageUrl);
+      return null;
+    }
+
     // Process image with sharp
     const processedBuffer = await sharp(buffer)
       .resize(512, 512, {
         fit: "cover",
-        position: "center"
+        position: "center",
+        background: { r: 0, g: 0, b: 0, alpha: 1 },
+        kernel: "lanczos3" // Use high-quality scaling algorithm
       })
+      .png({ quality: 100 }) // Convert to PNG with maximum quality
       .toBuffer();
 
     return processedBuffer;
@@ -76,10 +89,13 @@ const processImage = async (imageUrl) => {
 // Helper function to upload to Supabase storage
 const uploadToSupabase = async (buffer, filename) => {
   try {
+    // Determine content type based on filename
+    const contentType = filename.endsWith(".png") ? "image/png" : "image/jpeg";
+
     const { data, error } = await supabase.storage
       .from("images")
       .upload(filename, buffer, {
-        contentType: "image/jpeg",
+        contentType,
         upsert: true
       });
 
@@ -357,6 +373,9 @@ app.get("/get-random-pair", apiKeyAuth, async (req, res) => {
 
 app.get("/add-images", apiKeyAuth, async (req, res) => {
   try {
+    const { delete_missing = "true" } = req.query;
+    const shouldDeleteMissing = delete_missing.toLowerCase() === "true";
+
     // Get pairs that don't have URLs
     const { data: pairs, error: fetchError } = await supabase
       .from("pairs")
@@ -371,67 +390,96 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
     const rowsToDelete = [];
 
     for (const pair of pairs) {
-      const updates = {};
-      let foundImage1 = false;
-      let foundImage2 = false;
+      try {
+        const updates = {};
+        let foundImage1 = false;
+        let foundImage2 = false;
 
-      if (!pair.option_1_url) {
-        const url = await getUrlForSource(pair.source, pair.option_1_value);
-        if (url) {
-          // Process and store image for all sources
-          const processedImage = await processImage(url);
-          if (processedImage) {
-            const filename = `${String(pair.id).padStart(5, "0")}_1.jpg`;
-            const storedUrl = await uploadToSupabase(processedImage, filename);
-            if (storedUrl) {
-              updates.option_1_url = storedUrl;
-              foundImage1 = true;
+        if (!pair.option_1_url) {
+          const url = await getUrlForSource(pair.source, pair.option_1_value);
+          if (url) {
+            // Process and store image for all sources
+            const processedImage = await processImage(url);
+            if (processedImage) {
+              // Determine file extension based on source URL
+              const extension = url.toLowerCase().endsWith(".png")
+                ? ".png"
+                : ".jpg";
+              const filename = `${String(pair.id).padStart(
+                5,
+                "0"
+              )}_1${extension}`;
+              const storedUrl = await uploadToSupabase(
+                processedImage,
+                filename
+              );
+              if (storedUrl) {
+                updates.option_1_url = storedUrl;
+                foundImage1 = true;
+              }
             }
           }
-        }
-      } else {
-        foundImage1 = true;
-      }
-
-      if (!pair.option_2_url) {
-        const url = await getUrlForSource(pair.source, pair.option_2_value);
-        if (url) {
-          // Process and store image for all sources
-          const processedImage = await processImage(url);
-          if (processedImage) {
-            const filename = `${String(pair.id).padStart(5, "0")}_2.jpg`;
-            const storedUrl = await uploadToSupabase(processedImage, filename);
-            if (storedUrl) {
-              updates.option_2_url = storedUrl;
-              foundImage2 = true;
-            }
-          }
-        }
-      } else {
-        foundImage2 = true;
-      }
-
-      if (Object.keys(updates).length > 0) {
-        const { error: updateError } = await supabase
-          .from("pairs")
-          .update(updates)
-          .eq("id", pair.id);
-
-        if (updateError) {
-          results.push({ id: pair.id, error: updateError.message });
         } else {
-          results.push({ id: pair.id, updates });
+          foundImage1 = true;
         }
-      }
 
-      // If we couldn't find an image for either option, mark for deletion
-      if (!foundImage1 || !foundImage2) {
-        rowsToDelete.push(pair.id);
+        if (!pair.option_2_url) {
+          const url = await getUrlForSource(pair.source, pair.option_2_value);
+          if (url) {
+            // Process and store image for all sources
+            const processedImage = await processImage(url);
+            if (processedImage) {
+              // Determine file extension based on source URL
+              const extension = url.toLowerCase().endsWith(".png")
+                ? ".png"
+                : ".jpg";
+              const filename = `${String(pair.id).padStart(
+                5,
+                "0"
+              )}_2${extension}`;
+              const storedUrl = await uploadToSupabase(
+                processedImage,
+                filename
+              );
+              if (storedUrl) {
+                updates.option_2_url = storedUrl;
+                foundImage2 = true;
+              }
+            }
+          }
+        } else {
+          foundImage2 = true;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          const { error: updateError } = await supabase
+            .from("pairs")
+            .update(updates)
+            .eq("id", pair.id);
+
+          if (updateError) {
+            results.push({ id: pair.id, error: updateError.message });
+          } else {
+            results.push({ id: pair.id, updates });
+          }
+        }
+
+        // If we couldn't find an image for either option, mark for deletion
+        if (shouldDeleteMissing && (!foundImage1 || !foundImage2)) {
+          rowsToDelete.push(pair.id);
+        }
+      } catch (error) {
+        console.error(`Error processing pair ${pair.id}:`, error);
+        results.push({ id: pair.id, error: error.message });
+        // If we're deleting missing images and we hit an error, mark for deletion
+        if (shouldDeleteMissing) {
+          rowsToDelete.push(pair.id);
+        }
       }
     }
 
     // Delete rows where we couldn't find images for either option
-    if (rowsToDelete.length > 0) {
+    if (shouldDeleteMissing && rowsToDelete.length > 0) {
       const { error: deleteError } = await supabase
         .from("pairs")
         .delete()
@@ -445,7 +493,8 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
     res.json({
       processed: pairs.length,
       results,
-      deleted: rowsToDelete.length
+      deleted: rowsToDelete.length,
+      delete_missing: shouldDeleteMissing
     });
   } catch (error) {
     console.error("Error:", error);
