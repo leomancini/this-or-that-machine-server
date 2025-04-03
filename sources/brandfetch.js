@@ -1,5 +1,3 @@
-import sharp from "sharp";
-
 export const getBrandfetchData = async (brandName) => {
   const BRANDFETCH_CLIENT_ID = process.env.BRANDFETCH_CLIENT_ID;
   const BRANDFETCH_API_KEY = process.env.BRANDFETCH_API_KEY;
