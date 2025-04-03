@@ -1,0 +1,9 @@
+{
+  "service_id": "this-or-that-machine-server",
+  "service_name": "This or That Machine Server",
+  "domain": "https://this-or-that-machine-server.noshado.ws",
+  "host": "localhost",
+  "port": "3108",
+  "author": "leo",
+  "created_on": "Wed 02 Apr 2025 09:21:00 PM EDT"
+}
