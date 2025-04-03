@@ -330,7 +330,25 @@ app.get("/get-random-pair", apiKeyAuth, async (req, res) => {
       throw error;
     }
 
-    res.json(data);
+    // Format the response
+    const formattedResponse = {
+      id: data.id,
+      type: data.type,
+      source: data.source,
+      created_at: data.created_at,
+      options: [
+        {
+          value: data.option_1_value,
+          url: data.option_1_url
+        },
+        {
+          value: data.option_2_value,
+          url: data.option_2_url
+        }
+      ]
+    };
+
+    res.json(formattedResponse);
   } catch (error) {
     console.error("Error:", error);
     res.status(500).json({ error: "Failed to fetch random pair" });
