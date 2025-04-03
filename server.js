@@ -6,12 +6,14 @@ import { createClient } from "@supabase/supabase-js";
 import fetch from "node-fetch";
 import sharp from "sharp";
 import {
-  getBrandfetchData,
   getUnsplashData,
-  getWikiData
+  getWikiData,
+  getLogoDevData
 } from "./sources/index.js";
 
 dotenv.config();
+
+const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
 
 const app = express();
 const port = 3108;
@@ -70,7 +72,7 @@ const processImage = async (imageUrl) => {
 
     // Process image with sharp
     const processedBuffer = await sharp(buffer)
-      .resize(512, 512, {
+      .resize(IMAGE_SIZE, IMAGE_SIZE, {
         fit: "cover",
         position: "center",
         background: { r: 0, g: 0, b: 0, alpha: 1 },
@@ -115,9 +117,9 @@ const uploadToSupabase = async (buffer, filename) => {
 
 const getUrlForSource = async (source, value) => {
   switch (source) {
-    case "brandfetch":
-      const brandData = await getBrandfetchData(value);
-      return brandData.image;
+    case "logodev":
+      const logoDevData = await getLogoDevData(value);
+      return logoDevData.image;
     case "unsplash":
       const unsplashData = await getUnsplashData(value);
       return unsplashData.image;
@@ -181,7 +183,7 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
         input: [
           {
             role: "user",
-            content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: brandfetch), 'animal' (source: unsplash), 'food' (source: unsplash), 'city' (source: wikipedia). For each pair, provide a descriptive label for each option that explains what it represents.
+            content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash), 'city' (source: wikipedia). For each pair, provide a descriptive label for each option that explains what it represents.
 
 Here are some example pairs from the database to help you understand the format and avoid generating similar pairs:
 ${existingPairsText}${duplicatePairsText}
@@ -368,6 +370,99 @@ app.get("/get-random-pair", apiKeyAuth, async (req, res) => {
   } catch (error) {
     console.error("Error:", error);
     res.status(500).json({ error: "Failed to fetch random pair" });
+  }
+});
+
+app.get("/test/logodev", apiKeyAuth, async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    console.log("Testing LogoDev for query:", query);
+    const logoDevData = await getLogoDevData(query);
+    console.log("LogoDev response:", logoDevData);
+
+    if (!logoDevData.image) {
+      return res.status(404).json({ error: "No logo found for this query" });
+    }
+
+    // Process the image using the existing function
+    const processedImage = await processImage(logoDevData.image);
+    if (!processedImage) {
+      return res.status(404).json({ error: "Failed to process image" });
+    }
+
+    // Send the processed image
+    res.set("Content-Type", "image/png");
+    res.send(processedImage);
+  } catch (error) {
+    console.error("Error testing LogoDev:", error);
+    res.status(500).json({ error: "Failed to test LogoDev source" });
+  }
+});
+
+app.get("/test/unsplash", apiKeyAuth, async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    console.log("Testing Unsplash for query:", query);
+    const unsplashData = await getUnsplashData(query);
+    console.log("Unsplash response:", unsplashData);
+
+    if (!unsplashData.image) {
+      return res.status(404).json({ error: "No image found for this query" });
+    }
+
+    // Process the image using the existing function
+    const processedImage = await processImage(unsplashData.image);
+    if (!processedImage) {
+      return res.status(404).json({ error: "Failed to process image" });
+    }
+
+    // Send the processed image
+    res.set("Content-Type", "image/png");
+    res.send(processedImage);
+  } catch (error) {
+    console.error("Error testing Unsplash:", error);
+    res.status(500).json({ error: "Failed to test Unsplash source" });
+  }
+});
+
+app.get("/test/wikipedia", apiKeyAuth, async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    console.log("Testing Wikipedia for query:", query);
+    const wikiData = await getWikiData(query);
+    console.log("Wikipedia response:", wikiData);
+
+    if (!wikiData.image) {
+      return res.status(404).json({ error: "No image found for this query" });
+    }
+
+    // Process the image using the existing function
+    const processedImage = await processImage(wikiData.image);
+    if (!processedImage) {
+      return res.status(404).json({ error: "Failed to process image" });
+    }
+
+    // Send the processed image
+    res.set("Content-Type", "image/png");
+    res.send(processedImage);
+  } catch (error) {
+    console.error("Error testing Wikipedia:", error);
+    res.status(500).json({ error: "Failed to test Wikipedia source" });
   }
 });
 

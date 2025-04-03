@@ -39,7 +39,7 @@ export const getWikiData = async (query, size = "1024px") => {
       };
     }
 
-    const image = wikiPage.thumbnail?.url?.replace(/60px/, size) || null;
+    let image = wikiPage.thumbnail?.url?.replace(/60px/, size) || null;
     const pageId = wikiPage.id || null;
 
     if (!image) {
@@ -48,6 +48,11 @@ export const getWikiData = async (query, size = "1024px") => {
         image: null,
         pageId: null
       };
+    }
+
+    // Ensure the image URL is absolute
+    if (image && !image.startsWith("http")) {
+      image = `https:${image}`;
     }
 
     return {
