@@ -597,6 +597,45 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
   }
 });
 
+app.get("/get-all-pair-ids", apiKeyAuth, async (req, res) => {
+  try {
+    // Optional query parameters for filtering
+    const { type, source, limit = 100, offset = 0 } = req.query;
+
+    // Build the query
+    let query = supabase.from("pairs").select("id");
+
+    // Apply filters if provided
+    if (type) {
+      query = query.eq("type", type);
+    }
+
+    if (source) {
+      query = query.eq("source", source);
+    }
+
+    // Apply pagination
+    query = query.range(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit) - 1
+    );
+
+    // Execute the query
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    // Return just an array of IDs
+    const ids = data.map((pair) => pair.id);
+    res.json(ids);
+  } catch (error) {
+    console.error("Error fetching pair IDs:", error);
+    res.status(500).json({ error: "Failed to fetch pair IDs" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
