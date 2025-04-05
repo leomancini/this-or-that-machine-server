@@ -636,6 +636,97 @@ app.get("/get-all-pair-ids", apiKeyAuth, async (req, res) => {
   }
 });
 
+app.get("/vote", apiKeyAuth, async (req, res) => {
+  try {
+    const { id, option } = req.query;
+
+    if (!id || !option) {
+      return res.status(400).json({ error: "id and option are required" });
+    }
+
+    if (option !== "1" && option !== "2") {
+      return res.status(400).json({ error: "option must be 1 or 2" });
+    }
+
+    // First, get the pair details
+    const { data: pair, error: pairError } = await supabase
+      .from("pairs")
+      .select("option_1_value, option_2_value")
+      .eq("id", id)
+      .single();
+
+    if (pairError || !pair) {
+      return res.status(404).json({ error: "Pair not found" });
+    }
+
+    // Check if votes exist for this pair
+    const { data: existingVotes, error: voteError } = await supabase
+      .from("votes")
+      .select("*")
+      .eq("option_1_value", pair.option_1_value)
+      .eq("option_2_value", pair.option_2_value)
+      .single();
+
+    if (voteError && voteError.code !== "PGRST116") {
+      // PGRST116 is "not found" error
+      throw voteError;
+    }
+
+    if (existingVotes) {
+      // Update existing votes
+      const updateData = {
+        option_1_count:
+          option === "1"
+            ? existingVotes.option_1_count + 1
+            : existingVotes.option_1_count,
+        option_2_count:
+          option === "2"
+            ? existingVotes.option_2_count + 1
+            : existingVotes.option_2_count
+      };
+
+      const { error: updateError } = await supabase
+        .from("votes")
+        .update(updateData)
+        .eq("id", existingVotes.id);
+
+      if (updateError) throw updateError;
+
+      return res.json({
+        message: "Vote updated successfully",
+        votes: {
+          ...existingVotes,
+          ...updateData
+        }
+      });
+    } else {
+      // Create new vote record
+      const newVote = {
+        option_1_value: pair.option_1_value,
+        option_2_value: pair.option_2_value,
+        option_1_count: option === "1" ? 1 : 0,
+        option_2_count: option === "2" ? 1 : 0
+      };
+
+      const { data, error: insertError } = await supabase
+        .from("votes")
+        .insert([newVote])
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+
+      return res.json({
+        message: "Vote created successfully",
+        votes: data
+      });
+    }
+  } catch (error) {
+    console.error("Error processing vote:", error);
+    res.status(500).json({ error: "Failed to process vote" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
