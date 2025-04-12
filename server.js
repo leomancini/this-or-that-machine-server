@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import fetch from "node-fetch";
 import sharp from "sharp";
+import cors from "cors";
 import {
   getUnsplashData,
   getWikiData,
@@ -18,6 +19,15 @@ const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
 const app = express();
 const port = 3108;
 const openai = new OpenAI();
+
+// Configure CORS
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true
+  })
+);
 
 const supabaseUrl = process.env.SUPABASE_PROJECT_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -727,6 +737,14 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
     console.error("Error processing vote:", error);
     res.status(500).json({ error: "Failed to process vote" });
   }
+});
+
+app.get("/validate-api-key", (req, res) => {
+  const apiKey = req.query.key;
+  if (!apiKey || apiKey !== process.env.APP_API_KEY) {
+    return res.status(401).json({ valid: false, message: "Invalid API key" });
+  }
+  return res.json({ valid: true, message: "API key is valid" });
 });
 
 app.listen(port, () => {
