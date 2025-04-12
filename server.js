@@ -24,7 +24,7 @@ const openai = new OpenAI();
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "DELETE"],
     credentials: true
   })
 );
@@ -745,6 +745,127 @@ app.get("/validate-api-key", (req, res) => {
     return res.status(401).json({ valid: false, message: "Invalid API key" });
   }
   return res.json({ valid: true, message: "API key is valid" });
+});
+
+app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    if (!id) {
+      return res.status(400).json({ error: "Pair ID is required" });
+    }
+
+    // First, delete any associated votes
+    const { error: votesError } = await supabase
+      .from("votes")
+      .delete()
+      .eq("pair_id", id);
+
+    if (votesError) {
+      console.error("Error deleting votes:", votesError);
+      throw votesError;
+    }
+
+    // Then delete the pair
+    const { error: pairError } = await supabase
+      .from("pairs")
+      .delete()
+      .eq("id", id);
+
+    if (pairError) {
+      console.error("Error deleting pair:", pairError);
+      throw pairError;
+    }
+
+    res.json({ message: "Pair and associated votes deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting pair:", error);
+    res.status(500).json({ error: "Failed to delete pair" });
+  }
+});
+
+app.get("/get-all-pairs", apiKeyAuth, async (req, res) => {
+  try {
+    // Optional query parameters for filtering and pagination
+    const { type, source, limit = 100, offset = 0 } = req.query;
+
+    // Build the query for pairs
+    let query = supabase
+      .from("pairs")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    // Apply filters if provided
+    if (type) {
+      query = query.eq("type", type);
+    }
+
+    if (source) {
+      query = query.eq("source", source);
+    }
+
+    // Apply pagination
+    query = query.range(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit) - 1
+    );
+
+    // Execute the query
+    const { data: pairs, error: pairsError } = await query;
+
+    if (pairsError) {
+      throw pairsError;
+    }
+
+    // Get all votes for these pairs
+    const pairIds = pairs.map((pair) => pair.id);
+    const { data: votes, error: votesError } = await supabase
+      .from("votes")
+      .select("*")
+      .in("pair_id", pairIds);
+
+    if (votesError) {
+      throw votesError;
+    }
+
+    // Create a map of votes by pair_id for quick lookup
+    const votesMap = new Map();
+    votes.forEach((vote) => {
+      votesMap.set(vote.pair_id, vote);
+    });
+
+    // Format the response to include vote counts
+    const formattedData = pairs.map((pair) => {
+      const voteData = votesMap.get(pair.id) || {
+        option_1_count: 0,
+        option_2_count: 0
+      };
+
+      return {
+        id: pair.id,
+        type: pair.type,
+        source: pair.source,
+        created_at: pair.created_at,
+        options: [
+          {
+            value: pair.option_1_value,
+            url: pair.option_1_url,
+            votes: voteData.option_1_count
+          },
+          {
+            value: pair.option_2_value,
+            url: pair.option_2_url,
+            votes: voteData.option_2_count
+          }
+        ]
+      };
+    });
+
+    res.json(formattedData);
+  } catch (error) {
+    console.error("Error fetching pairs:", error);
+    res.status(500).json({ error: "Failed to fetch pairs" });
+  }
 });
 
 app.listen(port, () => {
