@@ -183,7 +183,7 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
         input: [
           {
             role: "user",
-            content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash), 'city' (source: wikipedia). For each pair, provide a descriptive label for each option that explains what it represents.
+            content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash),  For each pair, provide a descriptive label for each option that explains what it represents.
 
 Here are some example pairs from the database to help you understand the format and avoid generating similar pairs:
 ${existingPairsText}${duplicatePairsText}
@@ -651,7 +651,7 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
     // First, get the pair details
     const { data: pair, error: pairError } = await supabase
       .from("pairs")
-      .select("option_1_value, option_2_value")
+      .select("id, option_1_value, option_2_value")
       .eq("id", id)
       .single();
 
@@ -682,7 +682,8 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         option_2_count:
           option === "2"
             ? existingVotes.option_2_count + 1
-            : existingVotes.option_2_count
+            : existingVotes.option_2_count,
+        pair_id: pair.id
       };
 
       const { error: updateError } = await supabase
@@ -705,7 +706,8 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         option_1_value: pair.option_1_value,
         option_2_value: pair.option_2_value,
         option_1_count: option === "1" ? 1 : 0,
-        option_2_count: option === "2" ? 1 : 0
+        option_2_count: option === "2" ? 1 : 0,
+        pair_id: pair.id
       };
 
       const { data, error: insertError } = await supabase
