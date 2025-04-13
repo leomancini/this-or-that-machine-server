@@ -140,6 +140,221 @@ const getUrlForSource = async (source, value) => {
   }
 };
 
+// Helper function to generate pairs using OpenAI
+const generatePairsWithOpenAI = async (
+  type,
+  existingPairs,
+  duplicatePairs = []
+) => {
+  const typeFilter = type ? ` of type '${type}'` : "";
+  const duplicatePairsText =
+    duplicatePairs.length > 0
+      ? `\n\nIMPORTANT: The following pairs were already in the database. Please generate completely different pairs:\n${duplicatePairs
+          .map(
+            (pair) =>
+              `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
+          )
+          .join("\n")}`
+      : "";
+
+  const response = await openai.responses.create({
+    model: "gpt-4o-2024-08-06",
+    input: [
+      {
+        role: "user",
+        content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash),  For each pair, provide a descriptive label for each option that explains what it represents.
+
+Here are some example pairs from the database to help you understand the format and avoid generating similar pairs:
+${existingPairs}${duplicatePairsText}
+
+Note: The system will automatically check for duplicates before saving any new pairs.`
+      }
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "pairs",
+        schema: {
+          type: "object",
+          properties: {
+            pairs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: {
+                    type: "string"
+                  },
+                  source: {
+                    type: "string"
+                  },
+                  option_1_value: {
+                    type: "string"
+                  },
+                  option_2_value: {
+                    type: "string"
+                  }
+                },
+                required: [
+                  "type",
+                  "source",
+                  "option_1_value",
+                  "option_2_value"
+                ],
+                additionalProperties: false
+              }
+            }
+          },
+          required: ["pairs"],
+          additionalProperties: false
+        }
+      }
+    }
+  });
+
+  return response;
+};
+
+// Helper function to save pairs to database
+const savePairsToDatabase = async (pairs) => {
+  const insertedPairs = [];
+  const duplicatePairs = [];
+
+  for (const pair of pairs) {
+    // Check if pair already exists
+    const { data: existingPairs, error: checkError } = await supabase
+      .from("pairs")
+      .select("id")
+      .eq("type", pair.type)
+      .eq("source", pair.source)
+      .eq("option_1_value", pair.option_1_value)
+      .eq("option_2_value", pair.option_2_value);
+
+    if (checkError) {
+      throw checkError;
+    }
+
+    if (existingPairs && existingPairs.length > 0) {
+      duplicatePairs.push(pair);
+      continue;
+    }
+
+    const { data, error } = await supabase.from("pairs").insert([
+      {
+        type: pair.type,
+        source: pair.source,
+        option_1_value: pair.option_1_value,
+        option_2_value: pair.option_2_value,
+        created_at: new Date().toISOString()
+      }
+    ]);
+
+    if (error) {
+      throw error;
+    }
+
+    insertedPairs.push(pair);
+  }
+
+  return { insertedPairs, duplicatePairs };
+};
+
+// Helper function to add images to pairs
+const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
+  const results = [];
+  const rowsToDelete = [];
+
+  for (const pair of pairs) {
+    try {
+      const updates = {};
+      let foundImage1 = false;
+      let foundImage2 = false;
+
+      if (!pair.option_1_url) {
+        const url = await getUrlForSource(pair.source, pair.option_1_value);
+        if (url) {
+          const processedImage = await processImage(url);
+          if (processedImage) {
+            const extension = url.toLowerCase().endsWith(".png")
+              ? ".png"
+              : ".jpg";
+            const filename = `${String(pair.id).padStart(
+              5,
+              "0"
+            )}_1${extension}`;
+            const storedUrl = await uploadToSupabase(processedImage, filename);
+            if (storedUrl) {
+              updates.option_1_url = storedUrl;
+              foundImage1 = true;
+            }
+          }
+        }
+      } else {
+        foundImage1 = true;
+      }
+
+      if (!pair.option_2_url) {
+        const url = await getUrlForSource(pair.source, pair.option_2_value);
+        if (url) {
+          const processedImage = await processImage(url);
+          if (processedImage) {
+            const extension = url.toLowerCase().endsWith(".png")
+              ? ".png"
+              : ".jpg";
+            const filename = `${String(pair.id).padStart(
+              5,
+              "0"
+            )}_2${extension}`;
+            const storedUrl = await uploadToSupabase(processedImage, filename);
+            if (storedUrl) {
+              updates.option_2_url = storedUrl;
+              foundImage2 = true;
+            }
+          }
+        }
+      } else {
+        foundImage2 = true;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from("pairs")
+          .update(updates)
+          .eq("id", pair.id);
+
+        if (updateError) {
+          results.push({ id: pair.id, error: updateError.message });
+        } else {
+          results.push({ id: pair.id, updates });
+        }
+      }
+
+      if (shouldDeleteMissing && (!foundImage1 || !foundImage2)) {
+        rowsToDelete.push(pair.id);
+      }
+    } catch (error) {
+      console.error(`Error processing pair ${pair.id}:`, error);
+      results.push({ id: pair.id, error: error.message });
+      if (shouldDeleteMissing) {
+        rowsToDelete.push(pair.id);
+      }
+    }
+  }
+
+  if (shouldDeleteMissing && rowsToDelete.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("pairs")
+      .delete()
+      .in("id", rowsToDelete);
+
+    if (deleteError) {
+      console.error("Error deleting rows:", deleteError);
+    }
+  }
+
+  return { results, deleted: rowsToDelete.length };
+};
+
 app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
   try {
     const { type } = req.query; // Optional type filter
@@ -255,52 +470,13 @@ Note: The system will automatically check for duplicates before saving any new p
       const event = JSON.parse(response.output_text);
       const validatedPairs = PairsResponseSchema.parse(event.pairs);
 
-      const insertedPairs = [];
-      const duplicatePairs = [];
-
-      // Save each pair to Supabase
-      for (const pair of validatedPairs) {
-        // Check if pair already exists
-        const { data: existingPairs, error: checkError } = await supabase
-          .from("pairs")
-          .select("id")
-          .eq("type", pair.type)
-          .eq("source", pair.source)
-          .eq("option_1_value", pair.option_1_value)
-          .eq("option_2_value", pair.option_2_value);
-
-        if (checkError) {
-          console.error("Error checking for duplicates:", checkError);
-          throw checkError;
-        }
-
-        if (existingPairs && existingPairs.length > 0) {
-          duplicatePairs.push(pair);
-          continue;
-        }
-
-        const { data, error } = await supabase.from("pairs").insert([
-          {
-            type: pair.type,
-            source: pair.source,
-            option_1_value: pair.option_1_value,
-            option_2_value: pair.option_2_value,
-            created_at: new Date().toISOString()
-          }
-        ]);
-
-        if (error) {
-          console.error("Supabase error:", error);
-          throw error;
-        }
-
-        insertedPairs.push(pair);
-      }
+      const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
+        validatedPairs
+      );
 
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
       allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
 
-      // If we found no duplicates, we're done
       if (duplicatePairs.length === 0) {
         break;
       }
@@ -308,15 +484,20 @@ Note: The system will automatically check for duplicates before saving any new p
       attempts++;
     }
 
+    // Add images to the newly inserted pairs
+    const { results, deleted } = await addImagesToPairs(allInsertedPairs);
+
     res.json({
       inserted: allInsertedPairs,
       duplicates: allDuplicatePairs,
       attempts: attempts + 1,
+      image_results: results,
+      deleted: deleted,
       message: `Successfully inserted ${
         allInsertedPairs.length
       } new pairs after ${attempts + 1} attempt(s), found ${
         allDuplicatePairs.length
-      } duplicates`
+      } duplicates, and processed images for ${results.length} pairs`
     });
   } catch (error) {
     console.error("Error:", error);
@@ -325,7 +506,9 @@ Note: The system will automatically check for duplicates before saving any new p
         .status(400)
         .json({ error: "Invalid response format", details: error.errors });
     } else {
-      res.status(500).json({ error: "Failed to generate or save pairs" });
+      res
+        .status(500)
+        .json({ error: "Failed to generate pairs and add images" });
     }
   }
 });
@@ -746,6 +929,40 @@ app.get("/validate-api-key", (req, res) => {
   return res.json({ valid: true, message: "API key is valid" });
 });
 
+app.get("/get-metadata", apiKeyAuth, async (req, res) => {
+  try {
+    // Get all unique types
+    const { data: typesData, error: typesError } = await supabase
+      .from("pairs")
+      .select("type");
+
+    if (typesError) {
+      throw typesError;
+    }
+
+    // Get all unique sources
+    const { data: sourcesData, error: sourcesError } = await supabase
+      .from("pairs")
+      .select("source");
+
+    if (sourcesError) {
+      throw sourcesError;
+    }
+
+    // Get unique values using Set
+    const types = [...new Set(typesData.map((item) => item.type))];
+    const sources = [...new Set(sourcesData.map((item) => item.source))];
+
+    res.json({
+      types,
+      sources
+    });
+  } catch (error) {
+    console.error("Error fetching metadata:", error);
+    res.status(500).json({ error: "Failed to fetch metadata" });
+  }
+});
+
 app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
   try {
     const { id } = req.query;
@@ -786,7 +1003,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
 app.get("/get-all-pairs", apiKeyAuth, async (req, res) => {
   try {
     // Optional query parameters for filtering and pagination
-    const { type, source, limit = 100, offset = 0 } = req.query;
+    const { type, source, limit = 20, offset = 0 } = req.query;
 
     // Build the query for pairs
     let query = supabase
