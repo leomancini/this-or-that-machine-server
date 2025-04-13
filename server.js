@@ -23,7 +23,10 @@ const openai = new OpenAI();
 // Configure CORS
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: [
+      process.env.FRONTEND_URL || "http://localhost:3000",
+      "https://this-or-that-machine-admin.leo.gd"
+    ],
     methods: ["GET", "POST", "DELETE"],
     credentials: true
   })
