@@ -1084,6 +1084,92 @@ app.get("/get-all-pairs", apiKeyAuth, async (req, res) => {
   }
 });
 
+app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+
+    // Get all votes
+    const { data: votes, error: votesError } = await supabase
+      .from("votes")
+      .select("*");
+
+    if (votesError) {
+      throw votesError;
+    }
+
+    // Get all pair IDs from votes
+    const pairIds = votes.map((vote) => vote.pair_id);
+
+    // Get the corresponding pairs
+    const { data: pairs, error: pairsError } = await supabase
+      .from("pairs")
+      .select("id, option_1_url, option_2_url")
+      .in("id", pairIds);
+
+    if (pairsError) {
+      throw pairsError;
+    }
+
+    // Create a map of pairs by ID for quick lookup
+    const pairsMap = new Map();
+    pairs.forEach((pair) => {
+      pairsMap.set(pair.id, pair);
+    });
+
+    // Format the response with vote information and image URLs, filtering out votes without pairs
+    const allFormattedVotes = votes
+      .filter((vote) => pairsMap.has(vote.pair_id))
+      .map((vote) => {
+        const pair = pairsMap.get(vote.pair_id);
+        const totalVotes = vote.option_1_count + vote.option_2_count;
+        const majority = Math.abs(vote.option_1_count - vote.option_2_count);
+        const winningPercentage = Math.max(
+          vote.option_1_count / totalVotes,
+          vote.option_2_count / totalVotes
+        );
+        return {
+          option_1: {
+            value: vote.option_1_value,
+            count: vote.option_1_count,
+            url: pair.option_1_url
+          },
+          option_2: {
+            value: vote.option_2_value,
+            count: vote.option_2_count,
+            url: pair.option_2_url
+          },
+          total_votes: totalVotes,
+          majority: majority,
+          winning_percentage: winningPercentage
+        };
+      })
+      .sort((a, b) => {
+        // First sort by winning percentage (descending)
+        if (b.winning_percentage !== a.winning_percentage) {
+          return b.winning_percentage - a.winning_percentage;
+        }
+        // If percentages are equal, sort by total votes (descending)
+        return b.total_votes - a.total_votes;
+      })
+      .map(({ option_1, option_2 }) => ({ option_1, option_2 }));
+
+    // Apply pagination
+    const paginatedVotes = allFormattedVotes.slice(
+      parseInt(offset),
+      parseInt(offset) + parseInt(limit)
+    );
+
+    res.json({
+      votes: paginatedVotes,
+      total: allFormattedVotes.length,
+      has_more: parseInt(offset) + parseInt(limit) < allFormattedVotes.length
+    });
+  } catch (error) {
+    console.error("Error fetching votes:", error);
+    res.status(500).json({ error: "Failed to fetch votes" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
