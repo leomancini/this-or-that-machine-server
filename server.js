@@ -359,6 +359,72 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
   return { results, deleted: rowsToDelete.length };
 };
 
+// Helper function to find and delete duplicate pairs
+const findAndDeleteDuplicates = async () => {
+  try {
+    // Get all pairs
+    const { data: allPairs, error: fetchError } = await supabase
+      .from("pairs")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (fetchError) {
+      throw fetchError;
+    }
+
+    const duplicates = [];
+    const pairsToDelete = new Set();
+
+    // Create a map to track unique pairs
+    const uniquePairs = new Map();
+
+    // Iterate through all pairs
+    for (const pair of allPairs) {
+      // Create a normalized key that's the same regardless of option order
+      const key = [pair.option_1_value, pair.option_2_value].sort().join("|");
+
+      if (uniquePairs.has(key)) {
+        // This is a duplicate, add to deletion list
+        pairsToDelete.add(pair.id);
+        duplicates.push({
+          id: pair.id,
+          type: pair.type,
+          source: pair.source,
+          option_1_value: pair.option_1_value,
+          option_2_value: pair.option_2_value,
+          created_at: pair.created_at
+        });
+      } else {
+        // First time seeing this pair, add to unique pairs
+        uniquePairs.set(key, pair.id);
+      }
+    }
+
+    // Convert Set to Array for deletion
+    const pairsToDeleteArray = Array.from(pairsToDelete);
+
+    if (pairsToDeleteArray.length > 0) {
+      // Delete the duplicate pairs
+      const { error: deleteError } = await supabase
+        .from("pairs")
+        .delete()
+        .in("id", pairsToDeleteArray);
+
+      if (deleteError) {
+        throw deleteError;
+      }
+    }
+
+    return {
+      deleted: pairsToDeleteArray.length,
+      duplicates
+    };
+  } catch (error) {
+    console.error("Error finding and deleting duplicates:", error);
+    throw error;
+  }
+};
+
 app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
   try {
     const { type } = req.query; // Optional type filter
@@ -491,17 +557,25 @@ Note: The system will automatically check for duplicates before saving any new p
     // Add images to the newly inserted pairs
     const { results, deleted } = await addImagesToPairs(allInsertedPairs);
 
+    // Find and delete any duplicates in the database
+    const { deleted: deletedDuplicates, duplicates: foundDuplicates } =
+      await findAndDeleteDuplicates();
+
     res.json({
       inserted: allInsertedPairs,
       duplicates: allDuplicatePairs,
       attempts: attempts + 1,
       image_results: results,
       deleted: deleted,
+      deleted_duplicates: deletedDuplicates,
+      found_duplicates: foundDuplicates,
       message: `Successfully inserted ${
         allInsertedPairs.length
       } new pairs after ${attempts + 1} attempt(s), found ${
         allDuplicatePairs.length
-      } duplicates, and processed images for ${results.length} pairs`
+      } duplicates, processed images for ${
+        results.length
+      } pairs, and deleted ${deletedDuplicates} duplicate pairs`
     });
   } catch (error) {
     console.error("Error:", error);
