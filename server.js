@@ -20,6 +20,10 @@ const app = express();
 const port = 3108;
 const openai = new OpenAI();
 
+// Store recent pairs to prevent duplicates
+const RECENT_PAIRS_SIZE = 5; // Number of recent pairs to remember
+let recentPairs = [];
+
 // Configure CORS
 app.use(
   cors({
@@ -524,20 +528,42 @@ app.get("/get-random-pair", apiKeyAuth, async (req, res) => {
       throw countError;
     }
 
-    // Get a random offset
-    const randomOffset = Math.floor(Math.random() * count);
+    let randomOffset;
+    let data;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 10; // Maximum number of attempts to find a non-recent pair
 
-    // Fetch one random pair
-    const { data, error } = await supabase
-      .from("pairs")
-      .select(
-        "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
-      )
-      .range(randomOffset, randomOffset)
-      .single();
+    do {
+      // Get a random offset
+      randomOffset = Math.floor(Math.random() * count);
 
-    if (error) {
-      throw error;
+      // Fetch one random pair
+      const { data: pairData, error } = await supabase
+        .from("pairs")
+        .select(
+          "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
+        )
+        .range(randomOffset, randomOffset)
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      data = pairData;
+      attempts++;
+
+      // If we've tried too many times, just return the current pair
+      if (attempts >= MAX_ATTEMPTS) {
+        break;
+      }
+    } while (recentPairs.includes(data.id)); // Keep trying until we find a non-recent pair
+
+    // Add the new pair to recent pairs
+    recentPairs.push(data.id);
+    // Keep the array at the specified size
+    if (recentPairs.length > RECENT_PAIRS_SIZE) {
+      recentPairs.shift(); // Remove the oldest pair
     }
 
     // Format the response
