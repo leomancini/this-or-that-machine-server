@@ -997,7 +997,42 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       return res.status(400).json({ error: "Pair ID is required" });
     }
 
-    // First, delete any associated votes
+    // First, get the pair to find the image URLs
+    const { data: pair, error: pairFetchError } = await supabase
+      .from("pairs")
+      .select("option_1_url, option_2_url")
+      .eq("id", id)
+      .single();
+
+    if (pairFetchError) {
+      console.error("Error fetching pair:", pairFetchError);
+      throw pairFetchError;
+    }
+
+    // Delete the images from Supabase storage
+    if (pair.option_1_url) {
+      const filename1 = pair.option_1_url.split("/").pop();
+      const { error: deleteImage1Error } = await supabase.storage
+        .from("images")
+        .remove([filename1]);
+
+      if (deleteImage1Error) {
+        console.error("Error deleting image 1:", deleteImage1Error);
+      }
+    }
+
+    if (pair.option_2_url) {
+      const filename2 = pair.option_2_url.split("/").pop();
+      const { error: deleteImage2Error } = await supabase.storage
+        .from("images")
+        .remove([filename2]);
+
+      if (deleteImage2Error) {
+        console.error("Error deleting image 2:", deleteImage2Error);
+      }
+    }
+
+    // Delete any associated votes
     const { error: votesError } = await supabase
       .from("votes")
       .delete()
@@ -1019,7 +1054,9 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       throw pairError;
     }
 
-    res.json({ message: "Pair and associated votes deleted successfully" });
+    res.json({
+      message: "Pair, associated votes, and images deleted successfully"
+    });
   } catch (error) {
     console.error("Error deleting pair:", error);
     res.status(500).json({ error: "Failed to delete pair" });
