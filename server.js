@@ -51,7 +51,22 @@ app.listen(apiPort, () => {
 // Create WebSocket server
 const wss = new WebSocketServer({
   port: socketPort,
-  host: "0.0.0.0" // Listen on all network interfaces
+  host: "0.0.0.0", // Listen on all network interfaces
+  perMessageDeflate: {
+    zlibDeflateOptions: {
+      chunkSize: 1024,
+      memLevel: 7,
+      level: 3
+    },
+    zlibInflateOptions: {
+      chunkSize: 10 * 1024
+    },
+    clientNoContextTakeover: true,
+    serverNoContextTakeover: true,
+    serverMaxWindowBits: 10,
+    concurrencyLimit: 10,
+    threshold: 1024
+  }
 });
 
 // Store connected clients
@@ -59,6 +74,13 @@ const clients = new Set();
 
 wss.on("connection", (ws, req) => {
   console.log("New WebSocket client connected from:", req.socket.remoteAddress);
+  console.log("Request headers:", req.headers);
+
+  // Handle protocol upgrade
+  if (req.headers["sec-websocket-protocol"]) {
+    ws.protocol = req.headers["sec-websocket-protocol"];
+  }
+
   clients.add(ws);
 
   // Send a welcome message to confirm connection
@@ -71,6 +93,11 @@ wss.on("connection", (ws, req) => {
 
   ws.on("error", (error) => {
     console.error("WebSocket error:", error);
+    console.error("Error details:", {
+      code: error.code,
+      message: error.message,
+      stack: error.stack
+    });
   });
 
   ws.on("close", (code, reason) => {
@@ -81,10 +108,19 @@ wss.on("connection", (ws, req) => {
 
 wss.on("error", (error) => {
   console.error("WebSocket server error:", error);
+  console.error("Error details:", {
+    code: error.code,
+    message: error.message,
+    stack: error.stack
+  });
 });
 
 wss.on("listening", () => {
   console.log(`WebSocket Server is running at ws://0.0.0.0:${socketPort}`);
+  console.log("Server info:", {
+    address: wss.address(),
+    options: wss.options
+  });
 });
 
 // Helper function to broadcast to all clients
