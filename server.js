@@ -159,7 +159,8 @@ const broadcast = (data) => {
 
   const message = JSON.stringify(data);
   clients.forEach((client) => {
-    if (client.readyState === wss.WebSocket.OPEN) {
+    if (client.readyState === 1) {
+      // 1 represents OPEN state in ws module
       console.log("Sending to client:", client._socket.remoteAddress);
       client.send(message, (error) => {
         if (error) {
