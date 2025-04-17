@@ -73,20 +73,14 @@ const wss = new WebSocketServer({
 const clients = new Set();
 
 wss.on("connection", (ws, req) => {
-  console.log("=== New WebSocket Connection ===");
-  console.log("Client IP:", req.socket.remoteAddress);
-  console.log("Request URL:", req.url);
-  console.log("Request Headers:", req.headers);
-  console.log("WebSocket Protocol:", ws.protocol);
+  console.log("New WebSocket connection from:", req.socket.remoteAddress);
 
   // Handle protocol upgrade
   if (req.headers["sec-websocket-protocol"]) {
     ws.protocol = req.headers["sec-websocket-protocol"];
-    console.log("Setting protocol to:", ws.protocol);
   }
 
   clients.add(ws);
-  console.log("Total connected clients:", clients.size);
 
   // Set a timeout for the connection
   const timeout = setTimeout(() => {
@@ -95,7 +89,6 @@ wss.on("connection", (ws, req) => {
   }, 30000);
 
   ws.on("pong", () => {
-    console.log("Received pong from client");
     clearTimeout(timeout);
   });
 
@@ -108,69 +101,37 @@ wss.on("connection", (ws, req) => {
     (error) => {
       if (error) {
         console.error("Error sending welcome message:", error);
-      } else {
-        console.log("Welcome message sent successfully");
       }
     }
   );
 
   ws.on("error", (error) => {
-    console.error("=== WebSocket Error ===");
-    console.error("Error details:", {
-      code: error.code,
-      message: error.message,
-      stack: error.stack
-    });
+    console.error("WebSocket error:", error.message);
   });
 
   ws.on("close", (code, reason) => {
-    console.log("=== WebSocket Closed ===");
-    console.log("Code:", code);
-    console.log("Reason:", reason);
-    console.log("Client IP:", req.socket.remoteAddress);
+    console.log("WebSocket closed:", { code, reason });
     clients.delete(ws);
-    console.log("Remaining clients:", clients.size);
   });
 });
 
 wss.on("error", (error) => {
-  console.error("=== WebSocket Server Error ===");
-  console.error("Error details:", {
-    code: error.code,
-    message: error.message,
-    stack: error.stack
-  });
+  console.error("WebSocket server error:", error.message);
 });
 
 wss.on("listening", () => {
-  console.log("=== WebSocket Server Started ===");
-  console.log(`Listening on ws://0.0.0.0:${socketPort}`);
-  console.log("Server info:", {
-    address: wss.address(),
-    options: wss.options
-  });
+  console.log(`WebSocket server listening on ws://0.0.0.0:${socketPort}`);
 });
 
 // Helper function to broadcast to all clients
 const broadcast = (data) => {
-  console.log("=== Broadcasting to clients ===");
-  console.log("Number of connected clients:", clients.size);
-  console.log("Broadcast data:", data);
-
-  const message = JSON.stringify(data);
   clients.forEach((client) => {
     if (client.readyState === 1) {
-      // 1 represents OPEN state in ws module
-      console.log("Sending to client:", client._socket.remoteAddress);
-      client.send(message, (error) => {
+      client.send(JSON.stringify(data), (error) => {
         if (error) {
-          console.error("Error sending to client:", error);
-        } else {
-          console.log("Message sent successfully to client");
+          console.error("Error broadcasting to client:", error);
         }
       });
-    } else {
-      console.log("Client not in OPEN state:", client.readyState);
     }
   });
 };
@@ -1064,23 +1025,17 @@ app.get("/get-all-pair-ids", apiKeyAuth, async (req, res) => {
 
 app.get("/vote", apiKeyAuth, async (req, res) => {
   try {
-    console.log("=== Vote Request ===");
-    console.log("Query params:", req.query);
-
     const { id, option } = req.query;
 
     if (!id || !option) {
-      console.log("Missing required parameters");
       return res.status(400).json({ error: "id and option are required" });
     }
 
     if (option !== "1" && option !== "2") {
-      console.log("Invalid option value:", option);
       return res.status(400).json({ error: "option must be 1 or 2" });
     }
 
     // First, get the pair details
-    console.log("Fetching pair details for id:", id);
     const { data: pair, error: pairError } = await supabase
       .from("pairs")
       .select("id, option_1_value, option_2_value, option_1_url, option_2_url")
@@ -1088,13 +1043,10 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       .single();
 
     if (pairError || !pair) {
-      console.error("Error fetching pair:", pairError);
       return res.status(404).json({ error: "Pair not found" });
     }
-    console.log("Found pair:", pair);
 
     // Check if votes exist for this pair
-    console.log("Checking existing votes for pair:", pair.id);
     const { data: existingVotes, error: voteError } = await supabase
       .from("votes")
       .select("*")
@@ -1103,15 +1055,12 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       .single();
 
     if (voteError && voteError.code !== "PGRST116") {
-      console.error("Error checking votes:", voteError);
       throw voteError;
     }
-    console.log("Existing votes:", existingVotes);
 
     let voteData;
     if (existingVotes) {
       // Update existing votes
-      console.log("Updating existing votes");
       const updateData = {
         option_1_count:
           option === "1"
@@ -1130,7 +1079,6 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         .eq("id", existingVotes.id);
 
       if (updateError) {
-        console.error("Error updating votes:", updateError);
         throw updateError;
       }
 
@@ -1140,7 +1088,6 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       };
     } else {
       // Create new vote record
-      console.log("Creating new vote record");
       const newVote = {
         option_1_value: pair.option_1_value,
         option_2_value: pair.option_2_value,
@@ -1156,16 +1103,12 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         .single();
 
       if (insertError) {
-        console.error("Error inserting new vote:", insertError);
         throw insertError;
       }
       voteData = data;
     }
 
-    console.log("Vote data:", voteData);
-
     // Broadcast the vote event to all connected clients
-    console.log("Broadcasting vote to clients");
     broadcast({
       type: "vote",
       data: {
@@ -1188,12 +1131,7 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       votes: voteData
     });
   } catch (error) {
-    console.error("=== Error processing vote ===");
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-      stack: error.stack
-    });
+    console.error("Error processing vote:", error.message);
     res.status(500).json({ error: "Failed to process vote" });
   }
 });
