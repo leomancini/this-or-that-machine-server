@@ -1083,7 +1083,7 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
     console.log("Fetching pair details for id:", id);
     const { data: pair, error: pairError } = await supabase
       .from("pairs")
-      .select("id, option_1_value, option_2_value")
+      .select("id, option_1_value, option_2_value, option_1_url, option_2_url")
       .eq("id", id)
       .single();
 
