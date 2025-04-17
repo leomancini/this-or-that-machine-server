@@ -1307,6 +1307,91 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
   }
 });
 
+app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
+  try {
+    // Get total count of pairs
+    const { count, error: countError } = await supabase
+      .from("pairs")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) {
+      throw countError;
+    }
+
+    let randomOffset;
+    let data;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 10; // Maximum number of attempts to find a non-recent pair
+
+    do {
+      // Get a random offset
+      randomOffset = Math.floor(Math.random() * count);
+
+      // Fetch one random pair
+      const { data: pairData, error } = await supabase
+        .from("pairs")
+        .select(
+          "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
+        )
+        .range(randomOffset, randomOffset)
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      data = pairData;
+      attempts++;
+
+      // If we've tried too many times, just return the current pair
+      if (attempts >= MAX_ATTEMPTS) {
+        break;
+      }
+    } while (recentPairs.includes(data.id)); // Keep trying until we find a non-recent pair
+
+    // Add the new pair to recent pairs
+    recentPairs.push(data.id);
+    // Keep the array at the specified size
+    if (recentPairs.length > RECENT_PAIRS_SIZE) {
+      recentPairs.shift(); // Remove the oldest pair
+    }
+
+    // Get votes for this pair
+    const { data: votes, error: votesError } = await supabase
+      .from("votes")
+      .select("*")
+      .eq("pair_id", data.id)
+      .single();
+
+    if (votesError && votesError.code !== "PGRST116") {
+      // PGRST116 is "not found" error
+      throw votesError;
+    }
+
+    // Format the response
+    const formattedResponse = {
+      id: data.id,
+      options: [
+        {
+          value: data.option_1_value,
+          url: data.option_1_url,
+          votes: votes ? votes.option_1_count : 0
+        },
+        {
+          value: data.option_2_value,
+          url: data.option_2_url,
+          votes: votes ? votes.option_2_count : 0
+        }
+      ]
+    };
+
+    res.json(formattedResponse);
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ error: "Failed to fetch random pair votes" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
