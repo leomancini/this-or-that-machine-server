@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import fetch from "node-fetch";
 import sharp from "sharp";
 import cors from "cors";
+import { WebSocketServer } from "ws";
 import {
   getUnsplashData,
   getWikiData,
@@ -17,7 +18,8 @@ dotenv.config();
 const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
 
 const app = express();
-const port = 3108;
+const apiPort = 3108;
+const socketPort = 3109;
 const openai = new OpenAI();
 
 // Store recent pairs to prevent duplicates
@@ -40,6 +42,37 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     persistSession: false
   }
 });
+
+// Start the HTTP server
+app.listen(apiPort, () => {
+  console.log(`HTTP Server is running at http://localhost:${apiPort}`);
+});
+
+// Create WebSocket server
+const wss = new WebSocketServer({ port: socketPort });
+
+// Store connected clients
+const clients = new Set();
+
+wss.on("connection", (ws) => {
+  console.log("New WebSocket client connected");
+  clients.add(ws);
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+    clients.delete(ws);
+  });
+});
+
+// Helper function to broadcast to all clients
+const broadcast = (data) => {
+  const message = JSON.stringify(data);
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+};
 
 // API Key middleware
 const apiKeyAuth = (req, res, next) => {
@@ -964,6 +997,7 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       throw voteError;
     }
 
+    let voteData;
     if (existingVotes) {
       // Update existing votes
       const updateData = {
@@ -985,13 +1019,10 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
 
       if (updateError) throw updateError;
 
-      return res.json({
-        message: "Vote updated successfully",
-        votes: {
-          ...existingVotes,
-          ...updateData
-        }
-      });
+      voteData = {
+        ...existingVotes,
+        ...updateData
+      };
     } else {
       // Create new vote record
       const newVote = {
@@ -1009,12 +1040,29 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         .single();
 
       if (insertError) throw insertError;
-
-      return res.json({
-        message: "Vote created successfully",
-        votes: data
-      });
+      voteData = data;
     }
+
+    // Broadcast the vote event to all connected clients
+    broadcast({
+      type: "vote",
+      data: {
+        pair_id: pair.id,
+        option_1: {
+          value: pair.option_1_value,
+          count: voteData.option_1_count
+        },
+        option_2: {
+          value: pair.option_2_value,
+          count: voteData.option_2_count
+        }
+      }
+    });
+
+    return res.json({
+      message: "Vote processed successfully",
+      votes: voteData
+    });
   } catch (error) {
     console.error("Error processing vote:", error);
     res.status(500).json({ error: "Failed to process vote" });
@@ -1361,8 +1409,4 @@ app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
     console.error("Error:", error);
     res.status(500).json({ error: "Failed to fetch random pair votes" });
   }
-});
-
-app.listen(port, () => {
-  console.log(`Server is running at http://localhost:${port}`);
 });
