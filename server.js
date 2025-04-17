@@ -153,10 +153,23 @@ wss.on("listening", () => {
 
 // Helper function to broadcast to all clients
 const broadcast = (data) => {
+  console.log("=== Broadcasting to clients ===");
+  console.log("Number of connected clients:", clients.size);
+  console.log("Broadcast data:", data);
+
   const message = JSON.stringify(data);
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      console.log("Sending to client:", client._socket.remoteAddress);
+      client.send(message, (error) => {
+        if (error) {
+          console.error("Error sending to client:", error);
+        } else {
+          console.log("Message sent successfully to client");
+        }
+      });
+    } else {
+      console.log("Client not in OPEN state:", client.readyState);
     }
   });
 };
@@ -1050,17 +1063,23 @@ app.get("/get-all-pair-ids", apiKeyAuth, async (req, res) => {
 
 app.get("/vote", apiKeyAuth, async (req, res) => {
   try {
+    console.log("=== Vote Request ===");
+    console.log("Query params:", req.query);
+
     const { id, option } = req.query;
 
     if (!id || !option) {
+      console.log("Missing required parameters");
       return res.status(400).json({ error: "id and option are required" });
     }
 
     if (option !== "1" && option !== "2") {
+      console.log("Invalid option value:", option);
       return res.status(400).json({ error: "option must be 1 or 2" });
     }
 
     // First, get the pair details
+    console.log("Fetching pair details for id:", id);
     const { data: pair, error: pairError } = await supabase
       .from("pairs")
       .select("id, option_1_value, option_2_value")
@@ -1068,10 +1087,13 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       .single();
 
     if (pairError || !pair) {
+      console.error("Error fetching pair:", pairError);
       return res.status(404).json({ error: "Pair not found" });
     }
+    console.log("Found pair:", pair);
 
     // Check if votes exist for this pair
+    console.log("Checking existing votes for pair:", pair.id);
     const { data: existingVotes, error: voteError } = await supabase
       .from("votes")
       .select("*")
@@ -1080,13 +1102,15 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       .single();
 
     if (voteError && voteError.code !== "PGRST116") {
-      // PGRST116 is "not found" error
+      console.error("Error checking votes:", voteError);
       throw voteError;
     }
+    console.log("Existing votes:", existingVotes);
 
     let voteData;
     if (existingVotes) {
       // Update existing votes
+      console.log("Updating existing votes");
       const updateData = {
         option_1_count:
           option === "1"
@@ -1104,7 +1128,10 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         .update(updateData)
         .eq("id", existingVotes.id);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("Error updating votes:", updateError);
+        throw updateError;
+      }
 
       voteData = {
         ...existingVotes,
@@ -1112,6 +1139,7 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       };
     } else {
       // Create new vote record
+      console.log("Creating new vote record");
       const newVote = {
         option_1_value: pair.option_1_value,
         option_2_value: pair.option_2_value,
@@ -1126,11 +1154,17 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         .select()
         .single();
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error("Error inserting new vote:", insertError);
+        throw insertError;
+      }
       voteData = data;
     }
 
+    console.log("Vote data:", voteData);
+
     // Broadcast the vote event to all connected clients
+    console.log("Broadcasting vote to clients");
     broadcast({
       type: "vote",
       data: {
@@ -1151,7 +1185,12 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
       votes: voteData
     });
   } catch (error) {
-    console.error("Error processing vote:", error);
+    console.error("=== Error processing vote ===");
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
     res.status(500).json({ error: "Failed to process vote" });
   }
 });
