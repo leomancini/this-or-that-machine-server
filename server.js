@@ -51,7 +51,7 @@ app.listen(apiPort, () => {
 // Create WebSocket server
 const wss = new WebSocketServer({
   port: socketPort,
-  host: "0.0.0.0", // Listen on all network interfaces
+  host: "0.0.0.0",
   perMessageDeflate: {
     zlibDeflateOptions: {
       chunkSize: 1024,
@@ -66,7 +66,10 @@ const wss = new WebSocketServer({
     serverMaxWindowBits: 10,
     concurrencyLimit: 10,
     threshold: 1024
-  }
+  },
+  maxPayload: 100 * 1024 * 1024, // 100MB
+  keepalive: true,
+  keepaliveInterval: 30000 // 30 seconds
 });
 
 // Store connected clients
@@ -82,6 +85,16 @@ wss.on("connection", (ws, req) => {
   }
 
   clients.add(ws);
+
+  // Set a timeout for the connection
+  const timeout = setTimeout(() => {
+    console.log("Connection timeout, closing...");
+    ws.terminate();
+  }, 30000); // 30 seconds
+
+  ws.on("pong", () => {
+    clearTimeout(timeout);
+  });
 
   // Send a welcome message to confirm connection
   ws.send(
