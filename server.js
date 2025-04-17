@@ -66,33 +66,36 @@ const wss = new WebSocketServer({
     serverMaxWindowBits: 10,
     concurrencyLimit: 10,
     threshold: 1024
-  },
-  maxPayload: 100 * 1024 * 1024, // 100MB
-  keepalive: true,
-  keepaliveInterval: 30000 // 30 seconds
+  }
 });
 
 // Store connected clients
 const clients = new Set();
 
 wss.on("connection", (ws, req) => {
-  console.log("New WebSocket client connected from:", req.socket.remoteAddress);
-  console.log("Request headers:", req.headers);
+  console.log("=== New WebSocket Connection ===");
+  console.log("Client IP:", req.socket.remoteAddress);
+  console.log("Request URL:", req.url);
+  console.log("Request Headers:", req.headers);
+  console.log("WebSocket Protocol:", ws.protocol);
 
   // Handle protocol upgrade
   if (req.headers["sec-websocket-protocol"]) {
     ws.protocol = req.headers["sec-websocket-protocol"];
+    console.log("Setting protocol to:", ws.protocol);
   }
 
   clients.add(ws);
+  console.log("Total connected clients:", clients.size);
 
   // Set a timeout for the connection
   const timeout = setTimeout(() => {
     console.log("Connection timeout, closing...");
     ws.terminate();
-  }, 30000); // 30 seconds
+  }, 30000);
 
   ws.on("pong", () => {
+    console.log("Received pong from client");
     clearTimeout(timeout);
   });
 
@@ -101,11 +104,18 @@ wss.on("connection", (ws, req) => {
     JSON.stringify({
       type: "connection",
       message: "Connected successfully"
-    })
+    }),
+    (error) => {
+      if (error) {
+        console.error("Error sending welcome message:", error);
+      } else {
+        console.log("Welcome message sent successfully");
+      }
+    }
   );
 
   ws.on("error", (error) => {
-    console.error("WebSocket error:", error);
+    console.error("=== WebSocket Error ===");
     console.error("Error details:", {
       code: error.code,
       message: error.message,
@@ -114,13 +124,17 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", (code, reason) => {
-    console.log("Client disconnected. Code:", code, "Reason:", reason);
+    console.log("=== WebSocket Closed ===");
+    console.log("Code:", code);
+    console.log("Reason:", reason);
+    console.log("Client IP:", req.socket.remoteAddress);
     clients.delete(ws);
+    console.log("Remaining clients:", clients.size);
   });
 });
 
 wss.on("error", (error) => {
-  console.error("WebSocket server error:", error);
+  console.error("=== WebSocket Server Error ===");
   console.error("Error details:", {
     code: error.code,
     message: error.message,
@@ -129,7 +143,8 @@ wss.on("error", (error) => {
 });
 
 wss.on("listening", () => {
-  console.log(`WebSocket Server is running at ws://0.0.0.0:${socketPort}`);
+  console.log("=== WebSocket Server Started ===");
+  console.log(`Listening on ws://0.0.0.0:${socketPort}`);
   console.log("Server info:", {
     address: wss.address(),
     options: wss.options
