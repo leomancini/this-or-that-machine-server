@@ -49,19 +49,42 @@ app.listen(apiPort, () => {
 });
 
 // Create WebSocket server
-const wss = new WebSocketServer({ port: socketPort });
+const wss = new WebSocketServer({
+  port: socketPort,
+  host: "0.0.0.0" // Listen on all network interfaces
+});
 
 // Store connected clients
 const clients = new Set();
 
-wss.on("connection", (ws) => {
-  console.log("New WebSocket client connected");
+wss.on("connection", (ws, req) => {
+  console.log("New WebSocket client connected from:", req.socket.remoteAddress);
   clients.add(ws);
 
-  ws.on("close", () => {
-    console.log("Client disconnected");
+  // Send a welcome message to confirm connection
+  ws.send(
+    JSON.stringify({
+      type: "connection",
+      message: "Connected successfully"
+    })
+  );
+
+  ws.on("error", (error) => {
+    console.error("WebSocket error:", error);
+  });
+
+  ws.on("close", (code, reason) => {
+    console.log("Client disconnected. Code:", code, "Reason:", reason);
     clients.delete(ws);
   });
+});
+
+wss.on("error", (error) => {
+  console.error("WebSocket server error:", error);
+});
+
+wss.on("listening", () => {
+  console.log(`WebSocket Server is running at ws://0.0.0.0:${socketPort}`);
 });
 
 // Helper function to broadcast to all clients
