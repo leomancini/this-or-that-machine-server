@@ -1309,78 +1309,49 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
 
 app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
   try {
-    // Get total count of pairs
-    const { count, error: countError } = await supabase
-      .from("pairs")
-      .select("*", { count: "exact", head: true });
-
-    if (countError) {
-      throw countError;
-    }
-
-    let randomOffset;
-    let data;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 10; // Maximum number of attempts to find a non-recent pair
-
-    do {
-      // Get a random offset
-      randomOffset = Math.floor(Math.random() * count);
-
-      // Fetch one random pair
-      const { data: pairData, error } = await supabase
-        .from("pairs")
-        .select(
-          "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
-        )
-        .range(randomOffset, randomOffset)
-        .single();
-
-      if (error) {
-        throw error;
-      }
-
-      data = pairData;
-      attempts++;
-
-      // If we've tried too many times, just return the current pair
-      if (attempts >= MAX_ATTEMPTS) {
-        break;
-      }
-    } while (recentPairs.includes(data.id)); // Keep trying until we find a non-recent pair
-
-    // Add the new pair to recent pairs
-    recentPairs.push(data.id);
-    // Keep the array at the specified size
-    if (recentPairs.length > RECENT_PAIRS_SIZE) {
-      recentPairs.shift(); // Remove the oldest pair
-    }
-
-    // Get votes for this pair
+    // First get all pairs that have votes
     const { data: votes, error: votesError } = await supabase
       .from("votes")
-      .select("*")
-      .eq("pair_id", data.id)
+      .select("pair_id, option_1_count, option_2_count")
+      .or("option_1_count.gt.0,option_2_count.gt.0");
+
+    if (votesError) {
+      throw votesError;
+    }
+
+    if (!votes || votes.length === 0) {
+      return res.status(404).json({ error: "No pairs with votes found" });
+    }
+
+    // Get a random pair with votes
+    const randomVote = votes[Math.floor(Math.random() * votes.length)];
+
+    // Fetch the pair details
+    const { data: pairData, error: pairError } = await supabase
+      .from("pairs")
+      .select(
+        "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
+      )
+      .eq("id", randomVote.pair_id)
       .single();
 
-    if (votesError && votesError.code !== "PGRST116") {
-      // PGRST116 is "not found" error
-      throw votesError;
+    if (pairError) {
+      throw pairError;
     }
 
     // Format the response
     const formattedResponse = {
-      id: data.id,
+      id: pairData.id,
       options: [
         {
-          value: data.option_1_value,
-          url: data.option_1_url,
-          votes: votes ? votes.option_1_count : 0
+          value: pairData.option_1_value,
+          url: pairData.option_1_url,
+          votes: randomVote.option_1_count
         },
         {
-          value: data.option_2_value,
-          url: data.option_2_url,
-          votes: votes ? votes.option_2_count : 0
+          value: pairData.option_2_value,
+          url: pairData.option_2_url,
+          votes: randomVote.option_2_count
         }
       ]
     };
