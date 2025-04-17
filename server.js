@@ -1172,11 +1172,13 @@ app.get("/vote", apiKeyAuth, async (req, res) => {
         pair_id: pair.id,
         option_1: {
           value: pair.option_1_value,
-          count: voteData.option_1_count
+          count: voteData.option_1_count,
+          url: pair.option_1_url
         },
         option_2: {
           value: pair.option_2_value,
-          count: voteData.option_2_count
+          count: voteData.option_2_count,
+          url: pair.option_2_url
         }
       }
     });
