@@ -19,7 +19,7 @@ const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
 
 const app = express();
 const apiPort = 3108;
-const socketPort = 3109;
+const socketPort = 3908;
 const openai = new OpenAI();
 
 // Store recent pairs to prevent duplicates
