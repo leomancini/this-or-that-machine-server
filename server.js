@@ -1405,6 +1405,18 @@ app.get("/get-metadata", apiKeyAuth, async (req, res) => {
   }
 });
 
+app.get("/get-valid-types", apiKeyAuth, (req, res) => {
+  try {
+    const validTypes = Object.keys(VALID_TYPE_SOURCE_COMBINATIONS);
+    res.json({
+      valid_types: validTypes
+    });
+  } catch (error) {
+    console.error("Error fetching valid types:", error);
+    res.status(500).json({ error: "Failed to fetch valid types" });
+  }
+});
+
 app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
   try {
     const { id } = req.query;
