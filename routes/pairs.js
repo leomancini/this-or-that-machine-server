@@ -491,7 +491,7 @@ router.get("/add-images", async (req, res) => {
             pair.type
           );
           if (url) {
-            const processedImage = await processImage(url);
+            const processedImage = await processImage(url, pair.source);
             if (processedImage) {
               const extension = url.toLowerCase().endsWith(".png")
                 ? ".png"
@@ -521,7 +521,7 @@ router.get("/add-images", async (req, res) => {
             pair.type
           );
           if (url) {
-            const processedImage = await processImage(url);
+            const processedImage = await processImage(url, pair.source);
             if (processedImage) {
               const extension = url.toLowerCase().endsWith(".png")
                 ? ".png"

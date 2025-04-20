@@ -3,8 +3,15 @@ import fetch from "node-fetch";
 import { AbortController } from "node-abort-controller";
 import { IMAGE_SIZE } from "../config/env.js";
 
-export const processImage = async (imageUrl) => {
+export const processImage = async (imageUrl, source = "wikipedia") => {
   try {
+    // Determine resize strategy based on source
+    const isWikipedia = source === "wikipedia";
+    const fitStrategy = isWikipedia ? "contain" : "cover";
+    const background = isWikipedia
+      ? { r: 255, g: 255, b: 255, alpha: 1 }
+      : { r: 0, g: 0, b: 0, alpha: 1 };
+
     // Handle data URLs from text image generation
     if (imageUrl.startsWith("data:image/")) {
       // Extract the base64 data
@@ -13,13 +20,19 @@ export const processImage = async (imageUrl) => {
 
       // Process image with sharp
       const processedBuffer = await sharp(buffer)
-        .resize(IMAGE_SIZE, IMAGE_SIZE, {
-          fit: "cover",
+        .resize(768, 768, {
+          fit: fitStrategy,
           position: "center",
-          background: { r: 0, g: 0, b: 0, alpha: 1 },
-          kernel: "lanczos3" // Use high-quality scaling algorithm
+          background
         })
-        .png({ quality: 100 }) // Convert to PNG with maximum quality
+        .extend({
+          top: 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background
+        })
+        .png({ quality: 100 })
         .toBuffer();
 
       return processedBuffer;
@@ -62,13 +75,19 @@ export const processImage = async (imageUrl) => {
 
     // Process image with sharp
     const processedBuffer = await sharp(buffer)
-      .resize(IMAGE_SIZE, IMAGE_SIZE, {
-        fit: "cover",
+      .resize(768, 768, {
+        fit: fitStrategy,
         position: "center",
-        background: { r: 0, g: 0, b: 0, alpha: 1 },
-        kernel: "lanczos3" // Use high-quality scaling algorithm
+        background
       })
-      .png({ quality: 100 }) // Convert to PNG with maximum quality
+      .extend({
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background
+      })
+      .png({ quality: 100 })
       .toBuffer();
 
     return processedBuffer;

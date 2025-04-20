@@ -97,7 +97,10 @@ export const getWikiData = async (query, size = "1024px") => {
       };
     }
 
-    let image = wikiPage.thumbnail?.url?.replace(/60px/, size) || null;
+    // Extract size number from size parameter (e.g., "1024px" -> "1024")
+    const sizeNumber = size.replace(/[^0-9]/g, "");
+    let image =
+      wikiPage.thumbnail?.url?.replace(/60px/, `${sizeNumber}px`) || null;
     const pageId = wikiPage.id || null;
     console.debug(
       `[getWikiData] Initial thumbnail URL: ${image}, pageId: ${pageId}`
@@ -133,10 +136,10 @@ export const getWikiData = async (query, size = "1024px") => {
             console.debug(
               `[getWikiData] Using fallback image with title: ${bestImageTitle}`
             );
-            // Get the actual image URL
+            // Get the actual image URL with size parameter
             const imageInfoUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=imageinfo&titles=${encodeURIComponent(
               bestImageTitle
-            )}&iiprop=url`;
+            )}&iiprop=url&iiurlwidth=${sizeNumber}`;
             console.debug(
               `[getWikiData] Fetching image info from: ${imageInfoUrl}`
             );
@@ -147,7 +150,8 @@ export const getWikiData = async (query, size = "1024px") => {
               const imageInfo = Object.values(
                 imageInfoData.query?.pages || {}
               )[0]?.imageinfo?.[0];
-              image = imageInfo?.url || null;
+              // Use the scaled URL if available, otherwise fall back to the original URL
+              image = imageInfo?.thumburl || imageInfo?.url || null;
               console.debug(`[getWikiData] Final image URL: ${image}`);
             }
           }

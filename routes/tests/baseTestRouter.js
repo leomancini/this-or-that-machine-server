@@ -14,12 +14,12 @@ const errorHandler = (error, req, res, next) => {
 };
 
 // Common image processing and response handler
-const handleImageResponse = async (imageUrl, res) => {
+const handleImageResponse = async (imageUrl, res, source = "wikipedia") => {
   if (!imageUrl) {
     return res.status(404).json({ error: "No image found" });
   }
 
-  const processedImage = await processImage(imageUrl);
+  const processedImage = await processImage(imageUrl, source);
   if (!processedImage) {
     return res.status(404).json({ error: "Failed to process image" });
   }

@@ -16,7 +16,7 @@ router.get("/test/unsplash", async (req, res, next) => {
     const unsplashData = await getUnsplashData(query);
     console.log(`Unsplash response: ${JSON.stringify(unsplashData)}`);
 
-    await handleImageResponse(unsplashData.image, res);
+    await handleImageResponse(unsplashData.image, res, "unsplash");
   } catch (error) {
     next(error);
   }
