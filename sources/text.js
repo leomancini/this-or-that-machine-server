@@ -112,7 +112,7 @@ export const generateTextImage = async (text) => {
     // Calculate font size based on text length
     const maxWidth = width * 0.9; // Use more of the width
     let fontSize = 160; // Start with larger font size
-    ctx.font = `bold ${fontSize}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.font = `bold ${fontSize}px 'Liberation Sans', 'DejaVu Sans', 'Bitstream Vera Sans', Arial, sans-serif`;
 
     // Split text into lines if needed
     const words = text.split(" ");
@@ -143,7 +143,7 @@ export const generateTextImage = async (text) => {
 
     // Ensure text fits horizontally
     while (true) {
-      ctx.font = `bold ${fontSize}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.font = `bold ${fontSize}px 'Liberation Sans', 'DejaVu Sans', 'Bitstream Vera Sans', Arial, sans-serif`;
       const fits = lines.every(
         (line) => ctx.measureText(line).width <= maxWidth
       );
