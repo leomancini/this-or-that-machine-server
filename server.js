@@ -1528,8 +1528,7 @@ app.get("/get-all-pairs", apiKeyAuth, async (req, res) => {
     const pairIds = pairs.map((pair) => pair.id);
     const { data: votes, error: votesError } = await supabase
       .from("votes")
-      .select("*")
-      .in("pair_id", pairIds);
+      .select("*");
 
     if (votesError) {
       throw votesError;
@@ -1579,28 +1578,28 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
   try {
     const { limit = 20, offset = 0 } = req.query;
 
-    // Get all pairs with pagination
+    // First get all votes
+    const { data: votes, error: votesError } = await supabase
+      .from("votes")
+      .select("*");
+
+    if (votesError) {
+      throw votesError;
+    }
+
+    // Get pair IDs from votes
+    const pairIds = votes.map((vote) => vote.pair_id);
+
+    // Get pairs that have votes with pagination
     const { data: pairs, error: pairsError } = await supabase
       .from("pairs")
       .select("id, option_1_value, option_2_value, option_1_url, option_2_url")
+      .in("id", pairIds)
       .order("created_at", { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (pairsError) {
       throw pairsError;
-    }
-
-    // Get all pair IDs
-    const pairIds = pairs.map((pair) => pair.id);
-
-    // Get votes for these pairs
-    const { data: votes, error: votesError } = await supabase
-      .from("votes")
-      .select("*")
-      .in("pair_id", pairIds);
-
-    if (votesError) {
-      throw votesError;
     }
 
     // Create a map of votes by pair_id for quick lookup
@@ -1612,10 +1611,7 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
     // Format the response with vote information and image URLs
     const formattedVotes = pairs
       .map((pair) => {
-        const voteData = votesMap.get(pair.id) || {
-          option_1_count: 0,
-          option_2_count: 0
-        };
+        const voteData = votesMap.get(pair.id);
 
         const totalVotes = voteData.option_1_count + voteData.option_2_count;
         const majority = Math.abs(
@@ -1655,10 +1651,11 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
       })
       .map(({ option_1, option_2 }) => ({ option_1, option_2 }));
 
-    // Get total count for pagination
+    // Get total count of pairs with votes for pagination
     const { count, error: countError } = await supabase
       .from("pairs")
-      .select("*", { count: "exact", head: true });
+      .select("*", { count: "exact", head: true })
+      .in("id", pairIds);
 
     if (countError) {
       throw countError;
