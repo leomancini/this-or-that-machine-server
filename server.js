@@ -1674,36 +1674,40 @@ app.get("/get-all-votes", apiKeyAuth, async (req, res) => {
 
 app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
   try {
-    // First get the total count of pairs
-    const { count, error: countError } = await supabase
-      .from("pairs")
-      .select("*", { count: "exact", head: true });
-
-    if (countError) {
-      throw countError;
-    }
-
-    // Get a random offset
-    const randomOffset = Math.floor(Math.random() * count);
-
-    // Fetch one random pair
-    const { data: pairData, error: pairError } = await supabase
+    // First get all pairs that have votes
+    const { data: pairsWithVotes, error: pairsError } = await supabase
       .from("pairs")
       .select(
         "id, type, source, option_1_value, option_2_value, option_1_url, option_2_url, created_at"
       )
-      .range(randomOffset, randomOffset)
-      .single();
+      .in(
+        "id",
+        (
+          await supabase
+            .from("votes")
+            .select("pair_id")
+            .gt("option_1_count", 0)
+            .or("option_2_count.gt.0")
+        ).data.map((vote) => vote.pair_id)
+      );
 
-    if (pairError) {
-      throw pairError;
+    if (pairsError) {
+      throw pairsError;
     }
+
+    if (!pairsWithVotes || pairsWithVotes.length === 0) {
+      return res.status(404).json({ error: "No pairs with votes found" });
+    }
+
+    // Get a random pair from the pairs with votes
+    const randomPair =
+      pairsWithVotes[Math.floor(Math.random() * pairsWithVotes.length)];
 
     // Get votes for this pair
     const { data: votes, error: votesError } = await supabase
       .from("votes")
       .select("option_1_count, option_2_count")
-      .eq("pair_id", pairData.id)
+      .eq("pair_id", randomPair.id)
       .single();
 
     if (votesError && votesError.code !== "PGRST116") {
@@ -1712,16 +1716,16 @@ app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
 
     // Format the response
     const formattedResponse = {
-      id: pairData.id,
+      id: randomPair.id,
       options: [
         {
-          value: pairData.option_1_value,
-          url: pairData.option_1_url,
+          value: randomPair.option_1_value,
+          url: randomPair.option_1_url,
           votes: votes?.option_1_count || 0
         },
         {
-          value: pairData.option_2_value,
-          url: pairData.option_2_url,
+          value: randomPair.option_2_value,
+          url: randomPair.option_2_url,
           votes: votes?.option_2_count || 0
         }
       ]
