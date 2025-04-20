@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { generateTextImage } from "../sources/index.js";
+import { generateTextImage } from "../../sources/index.js";
+import { errorHandler } from "./baseTestRouter.js";
 
 const router = Router();
 
-router.get("/test/text", async (req, res) => {
+router.get("/test/text", async (req, res, next) => {
   try {
     const { text } = req.query;
 
@@ -25,9 +26,9 @@ router.get("/test/text", async (req, res) => {
     res.set("Content-Type", "image/png");
     res.send(buffer);
   } catch (error) {
-    console.error("Error testing text image generation:", error);
-    res.status(500).json({ error: "Failed to generate text image" });
+    next(error);
   }
 });
 
+router.use(errorHandler);
 export default router;

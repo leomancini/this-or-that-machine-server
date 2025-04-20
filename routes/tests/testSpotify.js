@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { getSpotifyToken } from "../utils/spotify.js";
+import { getSpotifyToken } from "../../utils/spotify.js";
 import fetch from "node-fetch";
-import { processImage } from "../utils/imageProcessing.js";
+import { errorHandler, handleImageResponse } from "./baseTestRouter.js";
 
 const router = Router();
 
-router.get("/test/spotify", async (req, res) => {
+router.get("/test/spotify", async (req, res, next) => {
   try {
     const { query } = req.query;
 
@@ -45,23 +45,11 @@ router.get("/test/spotify", async (req, res) => {
 
     // Get the highest resolution image (first one in the array)
     const imageUrl = album.images[0].url;
-
-    // Process the image using the existing function
-    const processedImage = await processImage(imageUrl);
-    if (!processedImage) {
-      return res.status(404).json({ error: "Failed to process image" });
-    }
-
-    // Send the processed image
-    res.set("Content-Type", "image/png");
-    res.send(processedImage);
+    await handleImageResponse(imageUrl, res);
   } catch (error) {
-    console.error("Spotify test error:", error);
-    res.status(500).json({
-      status: "error",
-      message: error.message
-    });
+    next(error);
   }
 });
 
+router.use(errorHandler);
 export default router;
