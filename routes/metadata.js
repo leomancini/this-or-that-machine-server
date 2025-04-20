@@ -49,4 +49,21 @@ router.get("/valid-types", (req, res) => {
   }
 });
 
+// Get valid sources endpoint
+router.get("/valid-sources", (req, res) => {
+  try {
+    const validSources = [
+      ...new Set(
+        Object.values(VALID_TYPE_SOURCE_COMBINATIONS).map((type) => type.source)
+      )
+    ];
+    res.json({
+      valid_sources: validSources
+    });
+  } catch (error) {
+    console.error("Error fetching valid sources:", error);
+    res.status(500).json({ error: "Failed to fetch valid sources" });
+  }
+});
+
 export default router;
