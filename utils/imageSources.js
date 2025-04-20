@@ -24,7 +24,6 @@ export const getUrlForSource = async (source, value, type) => {
       const spotifyData = await getSpotifyData(value, type);
       return spotifyData.image;
     case "text":
-      console.log(`Generating text image for: ${value}`);
       const textData = await generateTextImage(value);
       return textData.image;
     default:

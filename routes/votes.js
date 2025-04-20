@@ -176,10 +176,12 @@ router.get("/get-all-votes", async (req, res) => {
         };
       })
       .sort((a, b) => {
-        if (b.winning_percentage !== a.winning_percentage) {
-          return b.winning_percentage - a.winning_percentage;
-        }
-        return b.total_votes - a.total_votes;
+        // Calculate a combined score that considers both winning percentage and total votes
+        const scoreA = a.winning_percentage * a.total_votes;
+        const scoreB = b.winning_percentage * b.total_votes;
+
+        // Sort by the combined score (highest first)
+        return scoreB - scoreA;
       })
       .map(({ option_1, option_2 }) => ({ option_1, option_2 }));
 

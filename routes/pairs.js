@@ -102,6 +102,7 @@ router.get("/generate-pairs", async (req, res) => {
         transformedPairs
       );
 
+      // Add all successfully inserted pairs
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
       allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
       remainingCount = targetCount - allInsertedPairs.length;
@@ -112,11 +113,14 @@ router.get("/generate-pairs", async (req, res) => {
       }
     }
 
+    // Ensure we have exactly the target count by taking the first targetCount pairs
+    const finalPairs = allInsertedPairs.slice(0, targetCount);
+
     res.json({
-      inserted: allInsertedPairs,
+      inserted: finalPairs,
       duplicates: allDuplicatePairs,
       attempts,
-      message: `Successfully inserted ${allInsertedPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
+      message: `Successfully inserted ${finalPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
     });
   } catch (error) {
     console.error(`Error: ${error.message}`);
@@ -184,6 +188,7 @@ router.get("/generate-pairs-by-type", async (req, res) => {
         transformedPairs
       );
 
+      // Add all successfully inserted pairs
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
       allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
       remainingCount = targetCount - allInsertedPairs.length;
@@ -194,11 +199,14 @@ router.get("/generate-pairs-by-type", async (req, res) => {
       }
     }
 
+    // Ensure we have exactly the target count by taking the first targetCount pairs
+    const finalPairs = allInsertedPairs.slice(0, targetCount);
+
     res.json({
-      inserted: allInsertedPairs,
+      inserted: finalPairs,
       duplicates: allDuplicatePairs,
       attempts,
-      message: `Successfully inserted ${allInsertedPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
+      message: `Successfully inserted ${finalPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
     });
   } catch (error) {
     console.error(`Error: ${error.message}`);
