@@ -1,17 +1,8 @@
 import express from "express";
 import OpenAI from "openai";
-import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import cors from "cors";
 import { WebSocketServer } from "ws";
-import {
-  getUnsplashData,
-  getWikiData,
-  getLogoDevData,
-  getSpotifyData,
-  generateTextImage
-} from "./sources/index.js";
-import VALID_TYPE_SOURCE_COMBINATIONS from "./config/types.json" assert { type: "json" };
 import {
   testLogodev,
   testUnsplash,
@@ -20,10 +11,6 @@ import {
   testSpotify,
   spotify
 } from "./routes/index.js";
-import { processImage } from "./utils/imageProcessing.js";
-import { uploadToSupabase } from "./utils/supabaseStorage.js";
-import { generatePairsWithOpenAI } from "./utils/openai.js";
-import { getUrlForSource } from "./utils/urlGenerator.js";
 
 // Import routes
 import pairsRouter from "./routes/pairs.js";
@@ -34,7 +21,6 @@ import authRouter, { apiKeyAuth } from "./routes/auth.js";
 const app = express();
 const apiPort = 3108;
 const socketPort = 3908;
-const openai = new OpenAI();
 
 // Configure CORS
 app.use(
@@ -43,15 +29,6 @@ app.use(
     methods: ["GET", "POST", "DELETE"]
   })
 );
-
-const supabaseUrl = process.env.SUPABASE_PROJECT_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-});
 
 app.use(express.json());
 app.use(apiKeyAuth); // Apply API key auth to all routes
