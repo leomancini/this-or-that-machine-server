@@ -10,10 +10,66 @@ import { WebSocketServer } from "ws";
 import {
   getUnsplashData,
   getWikiData,
-  getLogoDevData
+  getLogoDevData,
+  generateTextImage
 } from "./sources/index.js";
+import { AbortController } from "node-abort-controller";
 
 dotenv.config();
+
+// Configuration for valid type and source combinations
+const VALID_TYPE_SOURCE_COMBINATIONS = {
+  brand: {
+    source: "logodev",
+    valueLength: { min: 1, max: 2 },
+    examples: {
+      option_1: "Nike",
+      option_2: "Adidas"
+    },
+    promptSupplement:
+      "Focus on well-known brands that are direct competitors in the same market segment. The brands should be recognizable and have distinct visual identities."
+  },
+  animal: {
+    source: "unsplash",
+    valueLength: { min: 1, max: 2 },
+    examples: {
+      option_1: "Lion",
+      option_2: "Tiger"
+    },
+    promptSupplement:
+      "Choose animals that are visually distinct and interesting to compare. Consider different habitats, sizes, or characteristics that make them compelling to compare."
+  },
+  food: {
+    source: "unsplash",
+    valueLength: { min: 1, max: 2 },
+    examples: {
+      option_1: "Pizza",
+      option_2: "Burger"
+    },
+    promptSupplement:
+      "Select foods that are visually appealing and represent different cuisines or categories. The foods should be easily recognizable and have distinct visual characteristics."
+  },
+  person: {
+    source: "wikipedia",
+    valueLength: { min: 1, max: 2 },
+    examples: {
+      option_1: "Einstein",
+      option_2: "Newton"
+    },
+    promptSupplement:
+      "Choose historical figures or celebrities who are well-known and have distinct visual characteristics. Consider their contributions, fields of work, or public personas."
+  },
+  topic: {
+    source: "text",
+    valueLength: { min: 4, max: 8 },
+    examples: {
+      option_1: "Criminalization of all recreational drugs",
+      option_2: "Complete drug legalization"
+    },
+    promptSupplement:
+      "Select prompts that represent opposing viewpoints on a set of esoteric, weird, or controversial social, political, or ethical issues. The prompts should be thought-provoking and generate meaningful discussion and controversial."
+  }
+};
 
 const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
 
@@ -148,24 +204,73 @@ const apiKeyAuth = (req, res, next) => {
 app.use(express.json());
 app.use(apiKeyAuth); // Apply API key auth to all routes
 
-const PairsResponseSchema = z.array(
-  z.object({
-    type: z.string(),
-    source: z.string(),
-    option_1_value: z.string(),
-    option_2_value: z.string()
-  })
-);
+const PairsResponseSchema = z.object({
+  pairs: z.array(
+    z.object({
+      type: z.string(),
+      source: z.string(),
+      option_1: z.string(),
+      option_2: z.string()
+    })
+  )
+});
+
+// Helper function to transform OpenAI response to database format
+const transformPairsForDatabase = (pairs) => {
+  return pairs.map((pair) => ({
+    type: pair.type,
+    source: pair.source,
+    option_1_value: pair.option_1,
+    option_2_value: pair.option_2
+  }));
+};
 
 // Helper function to download and process image
 const processImage = async (imageUrl) => {
   try {
+    // Handle data URLs from text image generation
+    if (imageUrl.startsWith("data:image/")) {
+      // Extract the base64 data
+      const base64Data = imageUrl.split(",")[1];
+      const buffer = Buffer.from(base64Data, "base64");
+
+      // Process image with sharp
+      const processedBuffer = await sharp(buffer)
+        .resize(IMAGE_SIZE, IMAGE_SIZE, {
+          fit: "cover",
+          position: "center",
+          background: { r: 0, g: 0, b: 0, alpha: 1 },
+          kernel: "lanczos3" // Use high-quality scaling algorithm
+        })
+        .png({ quality: 100 }) // Convert to PNG with maximum quality
+        .toBuffer();
+
+      return processedBuffer;
+    }
+
+    // Handle regular URLs
     // Ensure URL is absolute
     const absoluteUrl = imageUrl.startsWith("//")
       ? `https:${imageUrl}`
       : imageUrl;
 
-    const response = await fetch(absoluteUrl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    const response = await fetch(absoluteUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      }
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
     const buffer = await response.buffer();
 
     // Check if the content is SVG or XML
@@ -224,6 +329,7 @@ const uploadToSupabase = async (buffer, filename) => {
 };
 
 const getUrlForSource = async (source, value) => {
+  console.log(`Getting URL for source: ${source}, value: ${value}`);
   switch (source) {
     case "logodev":
       const logoDevData = await getLogoDevData(value);
@@ -234,6 +340,10 @@ const getUrlForSource = async (source, value) => {
     case "wikipedia":
       const wikiData = await getWikiData(value);
       return wikiData.image;
+    case "text":
+      console.log("Generating text image for:", value);
+      const textData = await generateTextImage(value);
+      return textData.image;
     default:
       return null;
   }
@@ -243,7 +353,8 @@ const getUrlForSource = async (source, value) => {
 const generatePairsWithOpenAI = async (
   type,
   existingPairs,
-  duplicatePairs = []
+  duplicatePairs = [],
+  { count }
 ) => {
   const typeFilter = type ? ` of type '${type}'` : "";
   const duplicatePairsText =
@@ -251,17 +362,87 @@ const generatePairsWithOpenAI = async (
       ? `\n\nIMPORTANT: The following pairs were already in the database. Please generate completely different pairs:\n${duplicatePairs
           .map(
             (pair) =>
-              `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
+              `- ${pair.type} (${pair.source}): ${pair.option_1} vs ${pair.option_2}`
           )
           .join("\n")}`
       : "";
 
+  // Get the valid sources for the type if specified
+  const typeConfig = type ? VALID_TYPE_SOURCE_COMBINATIONS[type] : null;
+  const sourceFilter = typeConfig ? ` with source '${typeConfig.source}'` : "";
+
+  // Create the prompt based on whether we're generating all types or a specific type
+  const prompt = type
+    ? `Generate a set of ${count} pairs${typeFilter}${sourceFilter} of two contrasting options each for a 'this or that' game. 
+
+IMPORTANT: Each pair MUST follow this EXACT format:
+{
+  "type": "${type}",
+  "source": "${typeConfig.source}",
+  "option_1": "value1",
+  "option_2": "value2"
+}
+
+Rules:
+- Option values must be ${typeConfig.valueLength.min}-${
+        typeConfig.valueLength.max
+      } words each
+- ${typeConfig.promptSupplement}
+
+Here is an example pair for type '${type}':
+${JSON.stringify(
+  {
+    type,
+    source: typeConfig.source,
+    option_1: typeConfig.examples.option_1,
+    option_2: typeConfig.examples.option_2
+  },
+  null,
+  2
+)}`
+    : `Generate a set of ${count} pairs of two contrasting options each for a 'this or that' game. The pairs should be of various types: ${Object.entries(
+        VALID_TYPE_SOURCE_COMBINATIONS
+      )
+        .map(([type, config]) => `${type} (source: ${config.source})`)
+        .join(", ")}.
+
+IMPORTANT: Each pair MUST follow this EXACT format:
+{
+  "type": "type_name",
+  "source": "source_name",
+  "option_1": "value1",
+  "option_2": "value2"
+}
+
+Rules for each type:
+${Object.entries(VALID_TYPE_SOURCE_COMBINATIONS)
+  .map(
+    ([type, config]) => `- ${type}:
+  * Source: ${config.source}
+  * Option values: ${config.valueLength.min}-${
+      config.valueLength.max
+    } words each
+  * ${config.promptSupplement}
+  * Example:
+${JSON.stringify(
+  {
+    type,
+    source: config.source,
+    option_1: config.examples.option_1,
+    option_2: config.examples.option_2
+  },
+  null,
+  2
+)}`
+  )
+  .join("\n\n")}`;
+
   const response = await openai.responses.create({
-    model: "gpt-4o-2024-08-06",
+    model: "gpt-4o",
     input: [
       {
         role: "user",
-        content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash),  For each pair, provide a descriptive label for each option that explains what it represents.
+        content: `${prompt}
 
 Here are some example pairs from the database to help you understand the format and avoid generating similar pairs:
 ${existingPairs}${duplicatePairsText}
@@ -287,19 +468,14 @@ Note: The system will automatically check for duplicates before saving any new p
                   source: {
                     type: "string"
                   },
-                  option_1_value: {
+                  option_1: {
                     type: "string"
                   },
-                  option_2_value: {
+                  option_2: {
                     type: "string"
                   }
                 },
-                required: [
-                  "type",
-                  "source",
-                  "option_1_value",
-                  "option_2_value"
-                ],
+                required: ["type", "source", "option_1", "option_2"],
                 additionalProperties: false
               }
             }
@@ -325,7 +501,6 @@ const savePairsToDatabase = async (pairs) => {
       .from("pairs")
       .select("id")
       .eq("type", pair.type)
-      .eq("source", pair.source)
       .eq("option_1_value", pair.option_1_value)
       .eq("option_2_value", pair.option_2_value);
 
@@ -369,6 +544,11 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
       let foundImage1 = false;
       let foundImage2 = false;
 
+      // Generate a temporary ID if pair.id is undefined
+      const tempId =
+        pair.id ||
+        `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
       if (!pair.option_1_url) {
         const url = await getUrlForSource(pair.source, pair.option_1_value);
         if (url) {
@@ -377,10 +557,7 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
             const extension = url.toLowerCase().endsWith(".png")
               ? ".png"
               : ".jpg";
-            const filename = `${String(pair.id).padStart(
-              5,
-              "0"
-            )}_1${extension}`;
+            const filename = `${String(tempId).padStart(5, "0")}_1${extension}`;
             const storedUrl = await uploadToSupabase(processedImage, filename);
             if (storedUrl) {
               updates.option_1_url = storedUrl;
@@ -400,10 +577,7 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
             const extension = url.toLowerCase().endsWith(".png")
               ? ".png"
               : ".jpg";
-            const filename = `${String(pair.id).padStart(
-              5,
-              "0"
-            )}_2${extension}`;
+            const filename = `${String(tempId).padStart(5, "0")}_2${extension}`;
             const storedUrl = await uploadToSupabase(processedImage, filename);
             if (storedUrl) {
               updates.option_2_url = storedUrl;
@@ -416,25 +590,33 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
       }
 
       if (Object.keys(updates).length > 0) {
-        const { error: updateError } = await supabase
-          .from("pairs")
-          .update(updates)
-          .eq("id", pair.id);
+        // If we have a real ID, update the pair
+        if (pair.id) {
+          const { error: updateError } = await supabase
+            .from("pairs")
+            .update(updates)
+            .eq("id", pair.id);
 
-        if (updateError) {
-          results.push({ id: pair.id, error: updateError.message });
+          if (updateError) {
+            results.push({ id: pair.id, error: updateError.message });
+          } else {
+            results.push({ id: pair.id, updates });
+          }
         } else {
-          results.push({ id: pair.id, updates });
+          // If we don't have a real ID yet, just track the updates
+          results.push({ id: tempId, updates, is_temp: true });
         }
       }
 
       if (shouldDeleteMissing && (!foundImage1 || !foundImage2)) {
-        rowsToDelete.push(pair.id);
+        if (pair.id) {
+          rowsToDelete.push(pair.id);
+        }
       }
     } catch (error) {
-      console.error(`Error processing pair ${pair.id}:`, error);
-      results.push({ id: pair.id, error: error.message });
-      if (shouldDeleteMissing) {
+      console.error(`Error processing pair ${pair.id || "temp"}:`, error);
+      results.push({ id: pair.id || "temp", error: error.message });
+      if (shouldDeleteMissing && pair.id) {
         rowsToDelete.push(pair.id);
       }
     }
@@ -522,7 +704,7 @@ const findAndDeleteDuplicates = async () => {
 
 app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
   try {
-    const { type } = req.query; // Optional type filter
+    const { count = 10 } = req.query;
 
     // First, fetch a limited set of existing pairs to avoid duplicates
     const { data: existingPairs, error: fetchError } = await supabase
@@ -533,97 +715,27 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
 
     if (fetchError) {
       console.error("Error fetching existing pairs:", fetchError);
-      throw fetchError;
+      return res.status(500).json({
+        error: "Failed to fetch existing pairs",
+        details: fetchError.message
+      });
     }
 
-    // If type is specified, filter pairs by type
-    const filteredPairs = type
-      ? existingPairs.filter((pair) => pair.type === type)
-      : existingPairs;
+    // If no pairs exist yet, start with an empty array
+    const samplePairs = existingPairs || [];
 
     // Take a random sample of 10 pairs to show in the prompt
-    const samplePairs = filteredPairs
+    const randomPairs = samplePairs
       .sort(() => Math.random() - 0.5) // Shuffle the array
       .slice(0, 10); // Take first 10
 
     // Format existing pairs for the prompt
-    const existingPairsText = samplePairs
+    const existingPairsText = randomPairs
       .map(
         (pair) =>
           `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
       )
       .join("\n");
-
-    const typeFilter = type ? ` of type '${type}'` : "";
-
-    const generatePairsWithOpenAI = async (duplicatePairs = []) => {
-      const duplicatePairsText =
-        duplicatePairs.length > 0
-          ? `\n\nIMPORTANT: The following pairs were already in the database. Please generate completely different pairs:\n${duplicatePairs
-              .map(
-                (pair) =>
-                  `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
-              )
-              .join("\n")}`
-          : "";
-
-      const response = await openai.responses.create({
-        model: "gpt-4o-2024-08-06",
-        input: [
-          {
-            role: "user",
-            content: `Generate a set of 10 pairs${typeFilter} of two contrasting options each for a 'this or that' game, where the option values are 1-2 words, with types 'brand' (source: logodev), 'animal' (source: unsplash), 'food' (source: unsplash),  For each pair, provide a descriptive label for each option that explains what it represents.
-
-Here are some example pairs from the database to help you understand the format and avoid generating similar pairs:
-${existingPairsText}${duplicatePairsText}
-
-Note: The system will automatically check for duplicates before saving any new pairs.`
-          }
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "pairs",
-            schema: {
-              type: "object",
-              properties: {
-                pairs: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      type: {
-                        type: "string"
-                      },
-                      source: {
-                        type: "string"
-                      },
-                      option_1_value: {
-                        type: "string"
-                      },
-                      option_2_value: {
-                        type: "string"
-                      }
-                    },
-                    required: [
-                      "type",
-                      "source",
-                      "option_1_value",
-                      "option_2_value"
-                    ],
-                    additionalProperties: false
-                  }
-                }
-              },
-              required: ["pairs"],
-              additionalProperties: false
-            }
-          }
-        }
-      });
-
-      return response;
-    };
 
     let allInsertedPairs = [];
     let allDuplicatePairs = [];
@@ -631,12 +743,18 @@ Note: The system will automatically check for duplicates before saving any new p
     const MAX_ATTEMPTS = 3;
 
     while (attempts < MAX_ATTEMPTS) {
-      const response = await generatePairsWithOpenAI(allDuplicatePairs);
+      const response = await generatePairsWithOpenAI(
+        null, // No specific type, will generate for all types
+        existingPairsText,
+        allDuplicatePairs,
+        { count: parseInt(count) }
+      );
       const event = JSON.parse(response.output_text);
-      const validatedPairs = PairsResponseSchema.parse(event.pairs);
+      const validatedPairs = PairsResponseSchema.parse(event);
+      const transformedPairs = transformPairsForDatabase(validatedPairs.pairs);
 
       const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
-        validatedPairs
+        transformedPairs
       );
 
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
@@ -649,28 +767,15 @@ Note: The system will automatically check for duplicates before saving any new p
       attempts++;
     }
 
-    // Add images to the newly inserted pairs
-    const { results, deleted } = await addImagesToPairs(allInsertedPairs);
-
-    // Find and delete any duplicates in the database
-    const { deleted: deletedDuplicates, duplicates: foundDuplicates } =
-      await findAndDeleteDuplicates();
-
     res.json({
       inserted: allInsertedPairs,
       duplicates: allDuplicatePairs,
       attempts: attempts + 1,
-      image_results: results,
-      deleted: deleted,
-      deleted_duplicates: deletedDuplicates,
-      found_duplicates: foundDuplicates,
       message: `Successfully inserted ${
         allInsertedPairs.length
       } new pairs after ${attempts + 1} attempt(s), found ${
         allDuplicatePairs.length
-      } duplicates, processed images for ${
-        results.length
-      } pairs, and deleted ${deletedDuplicates} duplicate pairs`
+      } duplicates`
     });
   } catch (error) {
     console.error("Error:", error);
@@ -679,9 +784,104 @@ Note: The system will automatically check for duplicates before saving any new p
         .status(400)
         .json({ error: "Invalid response format", details: error.errors });
     } else {
+      res.status(500).json({ error: "Failed to generate pairs" });
+    }
+  }
+});
+
+app.get("/generate-pairs-by-type", apiKeyAuth, async (req, res) => {
+  try {
+    const { type, count = 10 } = req.query;
+
+    if (!type) {
+      return res.status(400).json({ error: "type is required" });
+    }
+
+    // Validate type and source combination
+    if (!VALID_TYPE_SOURCE_COMBINATIONS[type]) {
+      return res.status(400).json({
+        error: "Invalid type",
+        valid_combinations: Object.keys(VALID_TYPE_SOURCE_COMBINATIONS)
+      });
+    }
+
+    // First, fetch a limited set of existing pairs to avoid duplicates
+    const { data: existingPairs, error: fetchError } = await supabase
+      .from("pairs")
+      .select("type, source, option_1_value, option_2_value")
+      .eq("type", type)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (fetchError) {
+      console.error("Error fetching existing pairs:", fetchError);
+      throw fetchError;
+    }
+
+    // If no pairs exist yet, start with an empty array
+    const samplePairs = existingPairs || [];
+
+    // Take a random sample of 10 pairs to show in the prompt
+    const randomPairs = samplePairs
+      .sort(() => Math.random() - 0.5) // Shuffle the array
+      .slice(0, 10); // Take first 10
+
+    // Format existing pairs for the prompt
+    const existingPairsText = randomPairs
+      .map(
+        (pair) =>
+          `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
+      )
+      .join("\n");
+
+    let allInsertedPairs = [];
+    let allDuplicatePairs = [];
+    let attempts = 0;
+    const MAX_ATTEMPTS = 3;
+
+    while (attempts < MAX_ATTEMPTS) {
+      const response = await generatePairsWithOpenAI(
+        type,
+        existingPairsText,
+        allDuplicatePairs,
+        { count: parseInt(count) }
+      );
+      const event = JSON.parse(response.output_text);
+      const validatedPairs = PairsResponseSchema.parse(event);
+      const transformedPairs = transformPairsForDatabase(validatedPairs.pairs);
+
+      const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
+        transformedPairs
+      );
+
+      allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
+      allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
+
+      if (duplicatePairs.length === 0) {
+        break;
+      }
+
+      attempts++;
+    }
+
+    res.json({
+      inserted: allInsertedPairs,
+      duplicates: allDuplicatePairs,
+      attempts: attempts + 1,
+      message: `Successfully inserted ${
+        allInsertedPairs.length
+      } new pairs after ${attempts + 1} attempt(s), found ${
+        allDuplicatePairs.length
+      } duplicates`
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    if (error instanceof z.ZodError) {
       res
-        .status(500)
-        .json({ error: "Failed to generate pairs and add images" });
+        .status(400)
+        .json({ error: "Invalid response format", details: error.errors });
+    } else {
+      res.status(500).json({ error: "Failed to generate pairs" });
     }
   }
 });
@@ -850,6 +1050,33 @@ app.get("/test/wikipedia", apiKeyAuth, async (req, res) => {
   } catch (error) {
     console.error("Error testing Wikipedia:", error);
     res.status(500).json({ error: "Failed to test Wikipedia source" });
+  }
+});
+
+app.get("/test/text", apiKeyAuth, async (req, res) => {
+  try {
+    const { text } = req.query;
+
+    if (!text) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    const textData = await generateTextImage(text);
+
+    if (!textData.image) {
+      return res.status(404).json({ error: "Failed to generate text image" });
+    }
+
+    // Convert base64 data URL to buffer
+    const base64Data = textData.image.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(base64Data, "base64");
+
+    // Send the processed image
+    res.set("Content-Type", "image/png");
+    res.send(buffer);
+  } catch (error) {
+    console.error("Error testing text image generation:", error);
+    res.status(500).json({ error: "Failed to generate text image" });
   }
 });
 

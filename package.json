@@ -11,9 +11,12 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
+    "canvas": "^3.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.19.2",
+    "node-abort-controller": "^3.1.1",
+    "node-fetch": "^2.7.0",
     "openai": "^4.91.1",
     "path": "^0.12.7",
     "sharp": "^0.33.5",
