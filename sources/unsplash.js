@@ -10,7 +10,6 @@ export const getUnsplashData = async (query) => {
   }
 
   try {
-    console.log(`Searching Unsplash for: ${query}`);
     const response = await fetch(
       `https://api.unsplash.com/search/photos?query=${encodeURIComponent(
         query
@@ -37,7 +36,6 @@ export const getUnsplashData = async (query) => {
     const data = await response.json();
 
     if (!data.results || data.results.length === 0) {
-      console.log("No images found for:", query);
       return {
         image: null,
         photoId: null
@@ -48,7 +46,6 @@ export const getUnsplashData = async (query) => {
     const photoId = data.results[0]?.id || null;
 
     if (!image) {
-      console.log("No valid image URL found for:", query);
       return {
         image: null,
         photoId: null

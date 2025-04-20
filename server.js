@@ -1,6 +1,5 @@
 import express from "express";
 import OpenAI from "openai";
-import dotenv from "dotenv";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import fetch from "node-fetch";
@@ -11,67 +10,21 @@ import {
   getUnsplashData,
   getWikiData,
   getLogoDevData,
+  getSpotifyData,
   generateTextImage
 } from "./sources/index.js";
 import { AbortController } from "node-abort-controller";
-
-dotenv.config();
-
-// Configuration for valid type and source combinations
-const VALID_TYPE_SOURCE_COMBINATIONS = {
-  brand: {
-    source: "logodev",
-    valueLength: { min: 1, max: 2 },
-    examples: {
-      option_1: "Nike",
-      option_2: "Adidas"
-    },
-    promptSupplement:
-      "Focus on well-known brands that are direct competitors in the same market segment. The brands should be recognizable and have distinct visual identities."
-  },
-  animal: {
-    source: "unsplash",
-    valueLength: { min: 1, max: 2 },
-    examples: {
-      option_1: "Lion",
-      option_2: "Tiger"
-    },
-    promptSupplement:
-      "Choose animals that are visually distinct and interesting to compare. Consider different habitats, sizes, or characteristics that make them compelling to compare."
-  },
-  food: {
-    source: "unsplash",
-    valueLength: { min: 1, max: 2 },
-    examples: {
-      option_1: "Pizza",
-      option_2: "Burger"
-    },
-    promptSupplement:
-      "Select foods that are visually appealing and represent different cuisines or categories. The foods should be easily recognizable and have distinct visual characteristics."
-  },
-  person: {
-    source: "wikipedia",
-    valueLength: { min: 1, max: 2 },
-    examples: {
-      option_1: "Einstein",
-      option_2: "Newton"
-    },
-    promptSupplement:
-      "Choose historical figures or celebrities who are well-known and have distinct visual characteristics. Consider their contributions, fields of work, or public personas."
-  },
-  topic: {
-    source: "text",
-    valueLength: { min: 4, max: 8 },
-    examples: {
-      option_1: "Criminalization of all recreational drugs",
-      option_2: "Complete drug legalization"
-    },
-    promptSupplement:
-      "Select prompts that represent opposing viewpoints on a set of esoteric, weird, or controversial social, political, or ethical issues. The prompts should be thought-provoking and generate meaningful discussion and controversial."
-  }
-};
-
-const IMAGE_SIZE = parseInt(process.env.IMAGE_SIZE);
+import VALID_TYPE_SOURCE_COMBINATIONS from "./config/types.json" assert { type: "json" };
+import {
+  testLogodev,
+  testUnsplash,
+  testWikipedia,
+  testText,
+  testSpotify,
+  spotify
+} from "./routes/index.js";
+import { processImage } from "./utils/imageProcessing.js";
+import { IMAGE_SIZE } from "./config/env.js";
 
 const app = express();
 const apiPort = 3108;
@@ -99,37 +52,34 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
   }
 });
 
-// Start the HTTP server
-app.listen(apiPort, () => {
-  console.log(`HTTP Server is running at http://localhost:${apiPort}`);
-});
-
-// Create WebSocket server
-const wss = new WebSocketServer({
-  port: socketPort,
-  host: "0.0.0.0",
-  perMessageDeflate: {
-    zlibDeflateOptions: {
-      chunkSize: 1024,
-      memLevel: 7,
-      level: 3
-    },
-    zlibInflateOptions: {
-      chunkSize: 10 * 1024
-    },
-    clientNoContextTakeover: true,
-    serverNoContextTakeover: true,
-    serverMaxWindowBits: 10,
-    concurrencyLimit: 10,
-    threshold: 1024
+// API Key middleware
+const apiKeyAuth = (req, res, next) => {
+  const apiKey = req.query.key;
+  if (!apiKey || apiKey !== process.env.APP_API_KEY) {
+    return res.status(401).json({ error: "Invalid API key" });
   }
-});
+  next();
+};
+
+app.use(express.json());
+app.use(apiKeyAuth); // Apply API key auth to all routes
+
+// Use test routes
+app.use(testLogodev);
+app.use(testUnsplash);
+app.use(testWikipedia);
+app.use(testText);
+app.use(testSpotify);
+app.use(spotify);
 
 // Store connected clients
 const clients = new Set();
 
+// Create WebSocket server
+const wss = new WebSocketServer({ port: socketPort });
+
 wss.on("connection", (ws, req) => {
-  console.log("New WebSocket connection from:", req.socket.remoteAddress);
+  console.log(`New WebSocket connection from: ${req.socket.remoteAddress}`);
 
   // Handle protocol upgrade
   if (req.headers["sec-websocket-protocol"]) {
@@ -156,23 +106,23 @@ wss.on("connection", (ws, req) => {
     }),
     (error) => {
       if (error) {
-        console.error("Error sending welcome message:", error);
+        console.error(`Error sending welcome message: ${error.message}`);
       }
     }
   );
 
   ws.on("error", (error) => {
-    console.error("WebSocket error:", error.message);
+    console.error(`WebSocket error: ${error.message}`);
   });
 
   ws.on("close", (code, reason) => {
-    console.log("WebSocket closed:", { code, reason });
+    console.log(`WebSocket closed: code=${code}, reason=${reason}`);
     clients.delete(ws);
   });
 });
 
 wss.on("error", (error) => {
-  console.error("WebSocket server error:", error.message);
+  console.error(`WebSocket server error: ${error.message}`);
 });
 
 wss.on("listening", () => {
@@ -191,18 +141,6 @@ const broadcast = (data) => {
     }
   });
 };
-
-// API Key middleware
-const apiKeyAuth = (req, res, next) => {
-  const apiKey = req.query.key;
-  if (!apiKey || apiKey !== process.env.APP_API_KEY) {
-    return res.status(401).json({ error: "Invalid API key" });
-  }
-  next();
-};
-
-app.use(express.json());
-app.use(apiKeyAuth); // Apply API key auth to all routes
 
 const PairsResponseSchema = z.object({
   pairs: z.array(
@@ -223,82 +161,6 @@ const transformPairsForDatabase = (pairs) => {
     option_1_value: pair.option_1,
     option_2_value: pair.option_2
   }));
-};
-
-// Helper function to download and process image
-const processImage = async (imageUrl) => {
-  try {
-    // Handle data URLs from text image generation
-    if (imageUrl.startsWith("data:image/")) {
-      // Extract the base64 data
-      const base64Data = imageUrl.split(",")[1];
-      const buffer = Buffer.from(base64Data, "base64");
-
-      // Process image with sharp
-      const processedBuffer = await sharp(buffer)
-        .resize(IMAGE_SIZE, IMAGE_SIZE, {
-          fit: "cover",
-          position: "center",
-          background: { r: 0, g: 0, b: 0, alpha: 1 },
-          kernel: "lanczos3" // Use high-quality scaling algorithm
-        })
-        .png({ quality: 100 }) // Convert to PNG with maximum quality
-        .toBuffer();
-
-      return processedBuffer;
-    }
-
-    // Handle regular URLs
-    // Ensure URL is absolute
-    const absoluteUrl = imageUrl.startsWith("//")
-      ? `https:${imageUrl}`
-      : imageUrl;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-    const response = await fetch(absoluteUrl, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-      }
-    });
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const buffer = await response.buffer();
-
-    // Check if the content is SVG or XML
-    const contentType = response.headers.get("content-type");
-    if (
-      contentType &&
-      (contentType.includes("svg") || contentType.includes("xml"))
-    ) {
-      console.log("Skipping SVG/XML image:", imageUrl);
-      return null;
-    }
-
-    // Process image with sharp
-    const processedBuffer = await sharp(buffer)
-      .resize(IMAGE_SIZE, IMAGE_SIZE, {
-        fit: "cover",
-        position: "center",
-        background: { r: 0, g: 0, b: 0, alpha: 1 },
-        kernel: "lanczos3" // Use high-quality scaling algorithm
-      })
-      .png({ quality: 100 }) // Convert to PNG with maximum quality
-      .toBuffer();
-
-    return processedBuffer;
-  } catch (error) {
-    console.error("Error processing image:", error);
-    return null;
-  }
 };
 
 // Helper function to upload to Supabase storage
@@ -328,8 +190,10 @@ const uploadToSupabase = async (buffer, filename) => {
   }
 };
 
-const getUrlForSource = async (source, value) => {
-  console.log(`Getting URL for source: ${source}, value: ${value}`);
+const getUrlForSource = async (source, value, type) => {
+  console.log(
+    `Getting image for ${value.toUpperCase()} on ${source.toUpperCase()}`
+  );
   switch (source) {
     case "logodev":
       const logoDevData = await getLogoDevData(value);
@@ -338,10 +202,13 @@ const getUrlForSource = async (source, value) => {
       const unsplashData = await getUnsplashData(value);
       return unsplashData.image;
     case "wikipedia":
-      const wikiData = await getWikiData(value);
+      const wikiData = await getWikiData(`${value} (${type})`);
       return wikiData.image;
+    case "spotify":
+      const spotifyData = await getSpotifyData(value, type);
+      return spotifyData.image;
     case "text":
-      console.log("Generating text image for:", value);
+      console.log(`Generating text image for: ${value}`);
       const textData = await generateTextImage(value);
       return textData.image;
     default:
@@ -399,7 +266,17 @@ ${JSON.stringify(
   },
   null,
   2
-)}`
+)}
+${
+  typeConfig.bannedExamples
+    ? `
+
+CRITICAL: The following examples are STRICTLY PROHIBITED and MUST NOT be generated under any circumstances:
+${typeConfig.bannedExamples.map((example) => `- ${example}`).join("\n")}
+
+IMPORTANT: If you generate any of these banned examples, the system will reject your response. You must generate completely new and different pairs that are not similar to any of these banned examples.`
+    : ""
+}`
     : `Generate a set of ${count} pairs of two contrasting options each for a 'this or that' game. The pairs should be of various types: ${Object.entries(
         VALID_TYPE_SOURCE_COMBINATIONS
       )
@@ -433,9 +310,23 @@ ${JSON.stringify(
   },
   null,
   2
-)}`
+)}
+${
+  config.bannedExamples
+    ? `  * CRITICAL: The following examples are STRICTLY PROHIBITED and MUST NOT be generated:
+${config.bannedExamples.map((example) => `    - ${example}`).join("\n")}`
+    : ""
+}`
   )
-  .join("\n\n")}`;
+  .join("\n\n")}
+
+${
+  Object.values(VALID_TYPE_SOURCE_COMBINATIONS).some(
+    (config) => config.bannedExamples
+  )
+    ? "IMPORTANT: If you generate any of these banned examples, the system will reject your response. You must generate completely new and different pairs that are not similar to any of these banned examples."
+    : ""
+}`;
 
   const response = await openai.responses.create({
     model: "gpt-4o",
@@ -496,13 +387,15 @@ const savePairsToDatabase = async (pairs) => {
   const duplicatePairs = [];
 
   for (const pair of pairs) {
-    // Check if pair already exists
+    // Check if pair already exists in any direction
     const { data: existingPairs, error: checkError } = await supabase
       .from("pairs")
       .select("id")
       .eq("type", pair.type)
-      .eq("option_1_value", pair.option_1_value)
-      .eq("option_2_value", pair.option_2_value);
+      .or(
+        `and(option_1_value.eq.${pair.option_1_value},option_2_value.eq.${pair.option_2_value}),` +
+          `and(option_1_value.eq.${pair.option_2_value},option_2_value.eq.${pair.option_1_value})`
+      );
 
     if (checkError) {
       throw checkError;
@@ -550,7 +443,11 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
         `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       if (!pair.option_1_url) {
-        const url = await getUrlForSource(pair.source, pair.option_1_value);
+        const url = await getUrlForSource(
+          pair.source,
+          pair.option_1_value,
+          pair.type
+        );
         if (url) {
           const processedImage = await processImage(url);
           if (processedImage) {
@@ -570,7 +467,11 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
       }
 
       if (!pair.option_2_url) {
-        const url = await getUrlForSource(pair.source, pair.option_2_value);
+        const url = await getUrlForSource(
+          pair.source,
+          pair.option_2_value,
+          pair.type
+        );
         if (url) {
           const processedImage = await processImage(url);
           if (processedImage) {
@@ -614,7 +515,9 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
         }
       }
     } catch (error) {
-      console.error(`Error processing pair ${pair.id || "temp"}:`, error);
+      console.error(
+        `Error processing pair ${pair.id || "temp"}: ${error.message}`
+      );
       results.push({ id: pair.id || "temp", error: error.message });
       if (shouldDeleteMissing && pair.id) {
         rowsToDelete.push(pair.id);
@@ -629,7 +532,7 @@ const addImagesToPairs = async (pairs, shouldDeleteMissing = true) => {
       .in("id", rowsToDelete);
 
     if (deleteError) {
-      console.error("Error deleting rows:", deleteError);
+      console.error(`Error deleting rows: ${deleteError.message}`);
     }
   }
 
@@ -705,6 +608,12 @@ const findAndDeleteDuplicates = async () => {
 app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
   try {
     const { count = 10 } = req.query;
+    const targetCount = parseInt(count);
+    let remainingCount = targetCount;
+    let allInsertedPairs = [];
+    let allDuplicatePairs = [];
+    let attempts = 0;
+    const MAX_ATTEMPTS = 3;
 
     // First, fetch a limited set of existing pairs to avoid duplicates
     const { data: existingPairs, error: fetchError } = await supabase
@@ -714,7 +623,7 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
       .limit(100); // Limit to most recent 100 pairs
 
     if (fetchError) {
-      console.error("Error fetching existing pairs:", fetchError);
+      console.error(`Error fetching existing pairs: ${fetchError.message}`);
       return res.status(500).json({
         error: "Failed to fetch existing pairs",
         details: fetchError.message
@@ -737,17 +646,12 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
       )
       .join("\n");
 
-    let allInsertedPairs = [];
-    let allDuplicatePairs = [];
-    let attempts = 0;
-    const MAX_ATTEMPTS = 3;
-
-    while (attempts < MAX_ATTEMPTS) {
+    while (remainingCount > 0 && attempts < MAX_ATTEMPTS) {
       const response = await generatePairsWithOpenAI(
         null, // No specific type, will generate for all types
         existingPairsText,
         allDuplicatePairs,
-        { count: parseInt(count) }
+        { count: remainingCount }
       );
       const event = JSON.parse(response.output_text);
       const validatedPairs = PairsResponseSchema.parse(event);
@@ -759,26 +663,22 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
 
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
       allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
+      remainingCount = targetCount - allInsertedPairs.length;
+      attempts++;
 
-      if (duplicatePairs.length === 0) {
+      if (remainingCount === 0) {
         break;
       }
-
-      attempts++;
     }
 
     res.json({
       inserted: allInsertedPairs,
       duplicates: allDuplicatePairs,
-      attempts: attempts + 1,
-      message: `Successfully inserted ${
-        allInsertedPairs.length
-      } new pairs after ${attempts + 1} attempt(s), found ${
-        allDuplicatePairs.length
-      } duplicates`
+      attempts,
+      message: `Successfully inserted ${allInsertedPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
     });
   } catch (error) {
-    console.error("Error:", error);
+    console.error(`Error: ${error.message}`);
     if (error instanceof z.ZodError) {
       res
         .status(400)
@@ -792,6 +692,12 @@ app.get("/generate-pairs", apiKeyAuth, async (req, res) => {
 app.get("/generate-pairs-by-type", apiKeyAuth, async (req, res) => {
   try {
     const { type, count = 10 } = req.query;
+    const targetCount = parseInt(count);
+    let remainingCount = targetCount;
+    let allInsertedPairs = [];
+    let allDuplicatePairs = [];
+    let attempts = 0;
+    const MAX_ATTEMPTS = 5;
 
     if (!type) {
       return res.status(400).json({ error: "type is required" });
@@ -814,7 +720,7 @@ app.get("/generate-pairs-by-type", apiKeyAuth, async (req, res) => {
       .limit(100);
 
     if (fetchError) {
-      console.error("Error fetching existing pairs:", fetchError);
+      console.error(`Error fetching existing pairs: ${fetchError.message}`);
       throw fetchError;
     }
 
@@ -834,17 +740,12 @@ app.get("/generate-pairs-by-type", apiKeyAuth, async (req, res) => {
       )
       .join("\n");
 
-    let allInsertedPairs = [];
-    let allDuplicatePairs = [];
-    let attempts = 0;
-    const MAX_ATTEMPTS = 3;
-
-    while (attempts < MAX_ATTEMPTS) {
+    while (remainingCount > 0 && attempts < MAX_ATTEMPTS) {
       const response = await generatePairsWithOpenAI(
         type,
         existingPairsText,
         allDuplicatePairs,
-        { count: parseInt(count) }
+        { count: remainingCount }
       );
       const event = JSON.parse(response.output_text);
       const validatedPairs = PairsResponseSchema.parse(event);
@@ -856,26 +757,22 @@ app.get("/generate-pairs-by-type", apiKeyAuth, async (req, res) => {
 
       allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
       allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
+      remainingCount = targetCount - allInsertedPairs.length;
+      attempts++;
 
-      if (duplicatePairs.length === 0) {
+      if (remainingCount === 0) {
         break;
       }
-
-      attempts++;
     }
 
     res.json({
       inserted: allInsertedPairs,
       duplicates: allDuplicatePairs,
-      attempts: attempts + 1,
-      message: `Successfully inserted ${
-        allInsertedPairs.length
-      } new pairs after ${attempts + 1} attempt(s), found ${
-        allDuplicatePairs.length
-      } duplicates`
+      attempts,
+      message: `Successfully inserted ${allInsertedPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
     });
   } catch (error) {
-    console.error("Error:", error);
+    console.error(`Error: ${error.message}`);
     if (error instanceof z.ZodError) {
       res
         .status(400)
@@ -960,126 +857,6 @@ app.get("/get-random-pair", apiKeyAuth, async (req, res) => {
   }
 });
 
-app.get("/test/logodev", apiKeyAuth, async (req, res) => {
-  try {
-    const { query } = req.query;
-
-    if (!query) {
-      return res.status(400).json({ error: "Search query is required" });
-    }
-
-    console.log("Testing LogoDev for query:", query);
-    const logoDevData = await getLogoDevData(query);
-    console.log("LogoDev response:", logoDevData);
-
-    if (!logoDevData.image) {
-      return res.status(404).json({ error: "No logo found for this query" });
-    }
-
-    // Process the image using the existing function
-    const processedImage = await processImage(logoDevData.image);
-    if (!processedImage) {
-      return res.status(404).json({ error: "Failed to process image" });
-    }
-
-    // Send the processed image
-    res.set("Content-Type", "image/png");
-    res.send(processedImage);
-  } catch (error) {
-    console.error("Error testing LogoDev:", error);
-    res.status(500).json({ error: "Failed to test LogoDev source" });
-  }
-});
-
-app.get("/test/unsplash", apiKeyAuth, async (req, res) => {
-  try {
-    const { query } = req.query;
-
-    if (!query) {
-      return res.status(400).json({ error: "Search query is required" });
-    }
-
-    console.log("Testing Unsplash for query:", query);
-    const unsplashData = await getUnsplashData(query);
-    console.log("Unsplash response:", unsplashData);
-
-    if (!unsplashData.image) {
-      return res.status(404).json({ error: "No image found for this query" });
-    }
-
-    // Process the image using the existing function
-    const processedImage = await processImage(unsplashData.image);
-    if (!processedImage) {
-      return res.status(404).json({ error: "Failed to process image" });
-    }
-
-    // Send the processed image
-    res.set("Content-Type", "image/png");
-    res.send(processedImage);
-  } catch (error) {
-    console.error("Error testing Unsplash:", error);
-    res.status(500).json({ error: "Failed to test Unsplash source" });
-  }
-});
-
-app.get("/test/wikipedia", apiKeyAuth, async (req, res) => {
-  try {
-    const { query } = req.query;
-
-    if (!query) {
-      return res.status(400).json({ error: "Search query is required" });
-    }
-
-    console.log("Testing Wikipedia for query:", query);
-    const wikiData = await getWikiData(query);
-    console.log("Wikipedia response:", wikiData);
-
-    if (!wikiData.image) {
-      return res.status(404).json({ error: "No image found for this query" });
-    }
-
-    // Process the image using the existing function
-    const processedImage = await processImage(wikiData.image);
-    if (!processedImage) {
-      return res.status(404).json({ error: "Failed to process image" });
-    }
-
-    // Send the processed image
-    res.set("Content-Type", "image/png");
-    res.send(processedImage);
-  } catch (error) {
-    console.error("Error testing Wikipedia:", error);
-    res.status(500).json({ error: "Failed to test Wikipedia source" });
-  }
-});
-
-app.get("/test/text", apiKeyAuth, async (req, res) => {
-  try {
-    const { text } = req.query;
-
-    if (!text) {
-      return res.status(400).json({ error: "Text is required" });
-    }
-
-    const textData = await generateTextImage(text);
-
-    if (!textData.image) {
-      return res.status(404).json({ error: "Failed to generate text image" });
-    }
-
-    // Convert base64 data URL to buffer
-    const base64Data = textData.image.replace(/^data:image\/\w+;base64,/, "");
-    const buffer = Buffer.from(base64Data, "base64");
-
-    // Send the processed image
-    res.set("Content-Type", "image/png");
-    res.send(buffer);
-  } catch (error) {
-    console.error("Error testing text image generation:", error);
-    res.status(500).json({ error: "Failed to generate text image" });
-  }
-});
-
 app.get("/add-images", apiKeyAuth, async (req, res) => {
   try {
     const { delete_missing = "true" } = req.query;
@@ -1105,7 +882,11 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
         let foundImage2 = false;
 
         if (!pair.option_1_url) {
-          const url = await getUrlForSource(pair.source, pair.option_1_value);
+          const url = await getUrlForSource(
+            pair.source,
+            pair.option_1_value,
+            pair.type
+          );
           if (url) {
             // Process and store image for all sources
             const processedImage = await processImage(url);
@@ -1133,7 +914,11 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
         }
 
         if (!pair.option_2_url) {
-          const url = await getUrlForSource(pair.source, pair.option_2_value);
+          const url = await getUrlForSource(
+            pair.source,
+            pair.option_2_value,
+            pair.type
+          );
           if (url) {
             // Process and store image for all sources
             const processedImage = await processImage(url);
@@ -1178,7 +963,7 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
           rowsToDelete.push(pair.id);
         }
       } catch (error) {
-        console.error(`Error processing pair ${pair.id}:`, error);
+        console.error(`Error processing pair ${pair.id}: ${error.message}`);
         results.push({ id: pair.id, error: error.message });
         // If we're deleting missing images and we hit an error, mark for deletion
         if (shouldDeleteMissing) {
@@ -1195,7 +980,7 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
         .in("id", rowsToDelete);
 
       if (deleteError) {
-        console.error("Error deleting rows:", deleteError);
+        console.error(`Error deleting rows: ${deleteError.message}`);
       }
     }
 
@@ -1206,7 +991,7 @@ app.get("/add-images", apiKeyAuth, async (req, res) => {
       delete_missing: shouldDeleteMissing
     });
   } catch (error) {
-    console.error("Error:", error);
+    console.error(`Error: ${error.message}`);
     res.status(500).json({ error: "Failed to update URLs" });
   }
 });
@@ -1433,7 +1218,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       .single();
 
     if (pairFetchError) {
-      console.error("Error fetching pair:", pairFetchError);
+      console.error(`Error fetching pair: ${pairFetchError.message}`);
       throw pairFetchError;
     }
 
@@ -1445,7 +1230,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
         .remove([filename1]);
 
       if (deleteImage1Error) {
-        console.error("Error deleting image 1:", deleteImage1Error);
+        console.error(`Error deleting image 1: ${deleteImage1Error.message}`);
       }
     }
 
@@ -1456,7 +1241,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
         .remove([filename2]);
 
       if (deleteImage2Error) {
-        console.error("Error deleting image 2:", deleteImage2Error);
+        console.error(`Error deleting image 2: ${deleteImage2Error.message}`);
       }
     }
 
@@ -1467,7 +1252,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       .eq("pair_id", id);
 
     if (votesError) {
-      console.error("Error deleting votes:", votesError);
+      console.error(`Error deleting votes: ${votesError.message}`);
       throw votesError;
     }
 
@@ -1478,7 +1263,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       .eq("id", id);
 
     if (pairError) {
-      console.error("Error deleting pair:", pairError);
+      console.error(`Error deleting pair: ${pairError.message}`);
       throw pairError;
     }
 
@@ -1486,7 +1271,7 @@ app.delete("/delete-pair", apiKeyAuth, async (req, res) => {
       message: "Pair, associated votes, and images deleted successfully"
     });
   } catch (error) {
-    console.error("Error deleting pair:", error);
+    console.error(`Error deleting pair: ${error.message}`);
     res.status(500).json({ error: "Failed to delete pair" });
   }
 });
@@ -1736,4 +1521,9 @@ app.get("/get-random-pair-votes", apiKeyAuth, async (req, res) => {
     console.error("Error:", error);
     res.status(500).json({ error: "Failed to fetch random pair votes" });
   }
+});
+
+// Start the Express server
+app.listen(apiPort, () => {
+  console.log(`API server listening on port ${apiPort}`);
 });

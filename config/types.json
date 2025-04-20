@@ -1,0 +1,73 @@
+{
+  "brand": {
+    "source": "logodev",
+    "valueLength": { "min": 1, "max": 2 },
+    "examples": {
+      "option_1": "Nike",
+      "option_2": "Adidas"
+    },
+    "bannedExamples": [
+      "Apple vs Samsung",
+      "Visa vs Mastercard",
+      "Coca-Cola vs Pepsi",
+      "McDonald's vs Burger King",
+      "Uber vs Lyft"
+    ],
+    "promptSupplement": "Focus on well-known brands that are direct competitors in the same market segment. The brands should be recognizable and have distinct visual identities."
+  },
+  "animal": {
+    "source": "unsplash",
+    "valueLength": { "min": 1, "max": 2 },
+    "examples": {
+      "option_1": "Lion",
+      "option_2": "Tiger"
+    },
+    "bannedExamples": [
+      "Panda vs Koala",
+      "Dolphin vs Whale",
+      "Eagle vs Hawk",
+      "Lion vs Lioness",
+      "Tiger vs Leopard",
+      "Bear vs Wolf",
+      "Shark vs Dolphin",
+      "Monkey vs Ape"
+    ],
+    "promptSupplement": "Choose animals that are visually distinct and interesting to compare. Consider different habitats, sizes, or characteristics that make them compelling to compare."
+  },
+  "food": {
+    "source": "unsplash",
+    "valueLength": { "min": 1, "max": 2 },
+    "examples": {
+      "option_1": "Pizza",
+      "option_2": "Burger"
+    },
+    "promptSupplement": "Select foods that are visually appealing and represent different cuisines or categories. The foods should be easily recognizable and have distinct visual characteristics."
+  },
+  "person": {
+    "source": "wikipedia",
+    "valueLength": { "min": 1, "max": 2 },
+    "examples": {
+      "option_1": "Einstein",
+      "option_2": "Newton"
+    },
+    "promptSupplement": "Choose historical figures or celebrities who are well-known and have distinct visual characteristics. Consider their contributions, fields of work, or public personas."
+  },
+  "topic": {
+    "source": "text",
+    "valueLength": { "min": 4, "max": 8 },
+    "examples": {
+      "option_1": "Criminalization of all recreational drugs",
+      "option_2": "Complete drug legalization"
+    },
+    "promptSupplement": "Select prompts that represent opposing viewpoints on a set of esoteric, weird, or controversial social, political, or ethical issues. The prompts should be thought-provoking and generate meaningful discussion and controversial."
+  },
+  "album": {
+    "source": "spotify",
+    "valueLength": { "min": 1, "max": 2 },
+    "examples": {
+      "option_1": "The Dark Side of the Moon",
+      "option_2": "The White Album"
+    },
+    "promptSupplement": "Choose albums from similar genres or by the same artist that are critically acclaimed. Prefer artists like The Beatles, Fleetwood Mac, Pink Floyd, Bob Dylan, Eric Clapton, The Rolling Stones, The Who, Led Zeppelin, Nirvana, Radiohead, and The Beach Boys."
+  }
+}

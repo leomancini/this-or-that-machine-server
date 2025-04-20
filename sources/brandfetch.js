@@ -12,7 +12,6 @@ export const getBrandfetchData = async (brandName) => {
 
   try {
     // First, get the brand ID from search
-    console.log(`Searching for brand: ${brandName}`);
     const searchResponse = await fetch(
       `https://api.brandfetch.io/v2/search/${encodeURIComponent(
         brandName
@@ -42,7 +41,6 @@ export const getBrandfetchData = async (brandName) => {
     const brandId = searchData[0]?.brandId;
 
     if (!brandId) {
-      console.log("No brand ID found for:", brandName);
       return {
         image: null,
         brandId: null
@@ -50,7 +48,6 @@ export const getBrandfetchData = async (brandName) => {
     }
 
     // Then, get detailed brand info
-    console.log(`Fetching details for brand ID: ${brandId}`);
     const brandResponse = await fetch(
       `https://api.brandfetch.io/v2/brands/${brandId}?c=${BRANDFETCH_CLIENT_ID}`,
       {
@@ -101,14 +98,12 @@ export const getBrandfetchData = async (brandName) => {
     }
 
     if (!logoUrl) {
-      console.log("No suitable dark theme logo found for brand:", brandName);
       return {
         image: null,
         brandId: null
       };
     }
 
-    console.log(`Found logo with width: ${maxWidth}px`);
     return {
       image: logoUrl,
       brandId

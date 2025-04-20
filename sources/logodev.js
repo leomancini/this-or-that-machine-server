@@ -12,7 +12,6 @@ const getLogoDevData = async (brandName) => {
   }
 
   try {
-    console.log(`Searching LogoDev for brand: ${brandName}`);
     const response = await fetch(
       `https://api.logo.dev/search?q=${encodeURIComponent(brandName)}`,
       {
@@ -33,12 +32,10 @@ const getLogoDevData = async (brandName) => {
     }
 
     const data = await response.json();
-    console.log("LogoDev search response:", data);
 
     const firstResult = data[0];
 
     if (!firstResult) {
-      console.log("No results found for brand:", brandName);
       return {
         image: null,
         brandId: null
@@ -46,7 +43,6 @@ const getLogoDevData = async (brandName) => {
     }
 
     const logoUrl = `https://img.logo.dev/${firstResult.domain}?token=${LOGO_DEV_PUBLISHABLE_KEY}&size=${IMAGE_SIZE}&retina=true&fallback=404`;
-    console.log("Generated logo URL:", logoUrl);
 
     return {
       image: logoUrl,
