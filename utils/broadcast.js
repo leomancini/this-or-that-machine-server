@@ -1,15 +1,15 @@
 import { WebSocketServer } from "ws";
 
-// Store connected clients
-const clients = new Set();
-
 // Create WebSocket server
 export const wss = new WebSocketServer({ noServer: true });
+
+// Add clients property to wss for easier access
+wss.clients = new Set();
 
 // Handle new connections
 wss.on("connection", (ws, req) => {
   console.log(`New WebSocket connection from: ${req.socket.remoteAddress}`);
-  clients.add(ws);
+  wss.clients.add(ws);
 
   // Send a welcome message to confirm connection
   ws.send(
@@ -27,7 +27,7 @@ wss.on("connection", (ws, req) => {
   // Handle client disconnection
   ws.on("close", (code, reason) => {
     console.log(`WebSocket closed: code=${code}, reason=${reason}`);
-    clients.delete(ws);
+    wss.clients.delete(ws);
   });
 
   // Handle errors
@@ -38,9 +38,9 @@ wss.on("connection", (ws, req) => {
 
 // Broadcast data to all connected clients
 export const broadcast = (data) => {
-  console.log(`Broadcasting to ${clients.size} clients:`, data);
+  console.log(`Broadcasting to ${wss.clients.size} clients:`, data);
   const message = JSON.stringify(data);
-  clients.forEach((client) => {
+  wss.clients.forEach((client) => {
     if (client.readyState === 1) {
       // WebSocket.OPEN
       client.send(message, (error) => {

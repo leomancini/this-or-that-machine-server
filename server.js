@@ -53,10 +53,42 @@ const server = app.listen(apiPort, () => {
   console.log(`API server listening on port ${apiPort}`);
 });
 
-// Attach WebSocket server to HTTP server
-server.on("upgrade", (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit("connection", ws, request);
+// Create a separate WebSocket server that listens on socketPort
+const socketServer = new WebSocketServer({ port: socketPort });
+
+socketServer.on("listening", () => {
+  console.log(`WebSocket server listening on ws://0.0.0.0:${socketPort}`);
+});
+
+// Forward connections from the standalone WebSocket server to our wss instance
+socketServer.on("connection", (ws, req) => {
+  console.log(`New WebSocket connection from: ${req.socket.remoteAddress}`);
+
+  // Add the client to our clients set
+  wss.clients.add(ws);
+
+  // Send a welcome message
+  ws.send(
+    JSON.stringify({
+      type: "connection",
+      message: "Connected successfully"
+    }),
+    (error) => {
+      if (error) {
+        console.error(`Error sending welcome message: ${error.message}`);
+      }
+    }
+  );
+
+  // Handle client disconnection
+  ws.on("close", (code, reason) => {
+    console.log(`WebSocket closed: code=${code}, reason=${reason}`);
+    wss.clients.delete(ws);
+  });
+
+  // Handle errors
+  ws.on("error", (error) => {
+    console.error(`WebSocket error: ${error.message}`);
   });
 });
 
