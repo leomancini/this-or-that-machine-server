@@ -8,35 +8,11 @@ import {
 } from "../utils/pairs.js";
 import { processImage } from "../utils/imageProcessing.js";
 import { getUrlForSource } from "../utils/imageSources.js";
+import { uploadToSupabase } from "../utils/supabaseStorage.js";
 
 const router = express.Router();
 const RECENT_PAIRS_SIZE = 10;
 const recentPairs = [];
-
-const uploadToSupabase = async (imageBuffer, filename) => {
-  try {
-    const { data, error } = await supabase.storage
-      .from("images")
-      .upload(filename, imageBuffer, {
-        contentType: "image/png",
-        upsert: true
-      });
-
-    if (error) {
-      console.error("Error uploading to Supabase:", error);
-      return null;
-    }
-
-    const {
-      data: { publicUrl }
-    } = supabase.storage.from("images").getPublicUrl(filename);
-
-    return publicUrl;
-  } catch (error) {
-    console.error("Error in uploadToSupabase:", error);
-    return null;
-  }
-};
 
 const PairsResponseSchema = z.object({
   pairs: z.array(
