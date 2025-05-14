@@ -17,6 +17,7 @@ import pairsRouter from "./routes/pairs.js";
 import votesRouter from "./routes/votes.js";
 import metadataRouter from "./routes/metadata.js";
 import authRouter, { apiKeyAuth } from "./routes/auth.js";
+import { wss, broadcast } from "./utils/broadcast.js";
 
 const app = express();
 const apiPort = 3108;
@@ -47,33 +48,26 @@ app.use("/votes", votesRouter);
 app.use("/metadata", metadataRouter);
 app.use("/auth", authRouter);
 
-// Store connected clients
-const clients = new Set();
+// Create HTTP server
+const server = app.listen(apiPort, () => {
+  console.log(`API server listening on port ${apiPort}`);
+});
 
-// Create WebSocket server
-const wss = new WebSocketServer({ port: socketPort });
+// Create a separate WebSocket server that listens on socketPort
+const socketServer = new WebSocketServer({ port: socketPort });
 
-wss.on("connection", (ws, req) => {
+socketServer.on("listening", () => {
+  console.log(`WebSocket server listening on ws://0.0.0.0:${socketPort}`);
+});
+
+// Forward connections from the standalone WebSocket server to our wss instance
+socketServer.on("connection", (ws, req) => {
   console.log(`New WebSocket connection from: ${req.socket.remoteAddress}`);
 
-  // Handle protocol upgrade
-  if (req.headers["sec-websocket-protocol"]) {
-    ws.protocol = req.headers["sec-websocket-protocol"];
-  }
+  // Add the client to our clients set
+  wss.clients.add(ws);
 
-  clients.add(ws);
-
-  // Set a timeout for the connection
-  const timeout = setTimeout(() => {
-    console.log("Connection timeout, closing...");
-    ws.terminate();
-  }, 30000);
-
-  ws.on("pong", () => {
-    clearTimeout(timeout);
-  });
-
-  // Send a welcome message to confirm connection
+  // Send a welcome message
   ws.send(
     JSON.stringify({
       type: "connection",
@@ -86,40 +80,17 @@ wss.on("connection", (ws, req) => {
     }
   );
 
+  // Handle client disconnection
+  ws.on("close", (code, reason) => {
+    console.log(`WebSocket closed: code=${code}, reason=${reason}`);
+    wss.clients.delete(ws);
+  });
+
+  // Handle errors
   ws.on("error", (error) => {
     console.error(`WebSocket error: ${error.message}`);
   });
-
-  ws.on("close", (code, reason) => {
-    console.log(`WebSocket closed: code=${code}, reason=${reason}`);
-    clients.delete(ws);
-  });
 });
 
-wss.on("error", (error) => {
-  console.error(`WebSocket server error: ${error.message}`);
-});
-
-wss.on("listening", () => {
-  console.log(`WebSocket server listening on ws://0.0.0.0:${socketPort}`);
-});
-
-// Helper function to broadcast to all clients
-const broadcast = (data) => {
-  clients.forEach((client) => {
-    if (client.readyState === 1) {
-      client.send(JSON.stringify(data), (error) => {
-        if (error) {
-          console.error("Error broadcasting to client:", error);
-        }
-      });
-    }
-  });
-};
-
-// Start the Express server
-app.listen(apiPort, () => {
-  console.log(`API server listening on port ${apiPort}`);
-});
-
+// Export the broadcast function for use in other modules
 export { broadcast };
