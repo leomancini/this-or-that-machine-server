@@ -25,78 +25,196 @@ const PairsResponseSchema = z.object({
   )
 });
 
+// Helper function to generate pairs
+const generatePairs = async (type, count) => {
+  const targetCount = parseInt(count);
+  let remainingCount = targetCount;
+  let allInsertedPairs = [];
+  let allDuplicatePairs = [];
+  let attempts = 0;
+  const MAX_ATTEMPTS = type ? 5 : 3;
+
+  const { data: existingPairs, error: fetchError } = await supabase
+    .from("pairs")
+    .select("type, source, option_1_value, option_2_value")
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (fetchError) {
+    throw fetchError;
+  }
+
+  const samplePairs = existingPairs || [];
+  const randomPairs = samplePairs.sort(() => Math.random() - 0.5).slice(0, 10);
+
+  const existingPairsText = randomPairs
+    .map(
+      (pair) =>
+        `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
+    )
+    .join("\n");
+
+  while (remainingCount > 0 && attempts < MAX_ATTEMPTS) {
+    const response = await generatePairsWithOpenAI(
+      type,
+      existingPairsText,
+      allDuplicatePairs,
+      { count: remainingCount }
+    );
+    const event = JSON.parse(response.output_text);
+    const validatedPairs = PairsResponseSchema.parse(event);
+    const transformedPairs = transformPairsForDatabase(validatedPairs.pairs);
+
+    const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
+      transformedPairs
+    );
+
+    allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
+    allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
+    remainingCount = targetCount - allInsertedPairs.length;
+    attempts++;
+
+    if (remainingCount === 0) {
+      break;
+    }
+  }
+
+  return {
+    pairs: allInsertedPairs.slice(0, targetCount),
+    duplicates: allDuplicatePairs,
+    attempts
+  };
+};
+
+// Helper function to add images to pairs
+const addImagesToPairs = async (pairs) => {
+  const results = [];
+  const rowsToDelete = [];
+
+  for (const pair of pairs) {
+    try {
+      const updates = {};
+      let foundImage1 = false;
+      let foundImage2 = false;
+
+      // Get the pair ID from the database if not already present
+      let pairId = pair.id;
+      if (!pairId) {
+        const { data: pairData, error: pairError } = await supabase
+          .from("pairs")
+          .select("id")
+          .eq("type", pair.type)
+          .eq("source", pair.source)
+          .eq("option_1_value", pair.option_1_value)
+          .eq("option_2_value", pair.option_2_value)
+          .single();
+
+        if (pairError) {
+          throw pairError;
+        }
+        pairId = pairData.id;
+      }
+
+      // Add images for option 1
+      const url1 = await getUrlForSource(
+        pair.source,
+        pair.option_1_value,
+        pair.type
+      );
+      if (url1) {
+        const processedImage1 = await processImage(url1, pair.source);
+        if (processedImage1) {
+          const extension1 = url1.toLowerCase().endsWith(".png")
+            ? ".png"
+            : ".jpg";
+          const filename1 = `${String(pairId).padStart(5, "0")}_1${extension1}`;
+          const storedUrl1 = await uploadToSupabase(processedImage1, filename1);
+          if (storedUrl1) {
+            updates.option_1_url = storedUrl1;
+            foundImage1 = true;
+          }
+        }
+      }
+
+      // Add images for option 2
+      const url2 = await getUrlForSource(
+        pair.source,
+        pair.option_2_value,
+        pair.type
+      );
+      if (url2) {
+        const processedImage2 = await processImage(url2, pair.source);
+        if (processedImage2) {
+          const extension2 = url2.toLowerCase().endsWith(".png")
+            ? ".png"
+            : ".jpg";
+          const filename2 = `${String(pairId).padStart(5, "0")}_2${extension2}`;
+          const storedUrl2 = await uploadToSupabase(processedImage2, filename2);
+          if (storedUrl2) {
+            updates.option_2_url = storedUrl2;
+            foundImage2 = true;
+          }
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from("pairs")
+          .update(updates)
+          .eq("id", pairId);
+
+        if (updateError) {
+          results.push({ id: pairId, error: updateError.message });
+        } else {
+          results.push({ id: pairId, updates });
+        }
+      }
+
+      if (!foundImage1 || !foundImage2) {
+        rowsToDelete.push(pairId);
+      }
+    } catch (error) {
+      console.error(`Error processing pair: ${error.message}`);
+      results.push({ id: pair.id, error: error.message });
+      if (pair.id) {
+        rowsToDelete.push(pair.id);
+      }
+    }
+  }
+
+  // Delete pairs where we couldn't find images
+  if (rowsToDelete.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("pairs")
+      .delete()
+      .in("id", rowsToDelete);
+
+    if (deleteError) {
+      console.error(`Error deleting rows: ${deleteError.message}`);
+    }
+  }
+
+  return {
+    updated: results.filter((r) => !r.error).length,
+    deleted: rowsToDelete.length,
+    details: {
+      results,
+      deleted: rowsToDelete
+    }
+  };
+};
+
 // Generate pairs endpoint
 router.get("/generate-pairs", async (req, res) => {
   try {
     const { count = 10 } = req.query;
-    const targetCount = parseInt(count);
-    let remainingCount = targetCount;
-    let allInsertedPairs = [];
-    let allDuplicatePairs = [];
-    let attempts = 0;
-    const MAX_ATTEMPTS = 3;
-
-    // First, fetch a limited set of existing pairs to avoid duplicates
-    const { data: existingPairs, error: fetchError } = await supabase
-      .from("pairs")
-      .select("type, source, option_1_value, option_2_value")
-      .order("created_at", { ascending: false })
-      .limit(100);
-
-    if (fetchError) {
-      console.error(`Error fetching existing pairs: ${fetchError.message}`);
-      return res.status(500).json({
-        error: "Failed to fetch existing pairs",
-        details: fetchError.message
-      });
-    }
-
-    const samplePairs = existingPairs || [];
-    const randomPairs = samplePairs
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 10);
-
-    const existingPairsText = randomPairs
-      .map(
-        (pair) =>
-          `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
-      )
-      .join("\n");
-
-    while (remainingCount > 0 && attempts < MAX_ATTEMPTS) {
-      const response = await generatePairsWithOpenAI(
-        null,
-        existingPairsText,
-        allDuplicatePairs,
-        { count: remainingCount }
-      );
-      const event = JSON.parse(response.output_text);
-      const validatedPairs = PairsResponseSchema.parse(event);
-      const transformedPairs = transformPairsForDatabase(validatedPairs.pairs);
-
-      const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
-        transformedPairs
-      );
-
-      // Add all successfully inserted pairs
-      allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
-      allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
-      remainingCount = targetCount - allInsertedPairs.length;
-      attempts++;
-
-      if (remainingCount === 0) {
-        break;
-      }
-    }
-
-    // Ensure we have exactly the target count by taking the first targetCount pairs
-    const finalPairs = allInsertedPairs.slice(0, targetCount);
+    const { pairs, duplicates, attempts } = await generatePairs(null, count);
 
     res.json({
-      inserted: finalPairs,
-      duplicates: allDuplicatePairs,
+      inserted: pairs,
+      duplicates,
       attempts,
-      message: `Successfully inserted ${finalPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
+      message: `Successfully inserted ${pairs.length} new pairs after ${attempts} attempt(s), found ${duplicates.length} duplicates`
     });
   } catch (error) {
     console.error(`Error: ${error.message}`);
@@ -114,75 +232,18 @@ router.get("/generate-pairs", async (req, res) => {
 router.get("/generate-pairs-by-type", async (req, res) => {
   try {
     const { type, count = 10 } = req.query;
-    const targetCount = parseInt(count);
-    let remainingCount = targetCount;
-    let allInsertedPairs = [];
-    let allDuplicatePairs = [];
-    let attempts = 0;
-    const MAX_ATTEMPTS = 5;
 
     if (!type) {
       return res.status(400).json({ error: "type is required" });
     }
 
-    const { data: existingPairs, error: fetchError } = await supabase
-      .from("pairs")
-      .select("type, source, option_1_value, option_2_value")
-      .eq("type", type)
-      .order("created_at", { ascending: false })
-      .limit(100);
-
-    if (fetchError) {
-      console.error(`Error fetching existing pairs: ${fetchError.message}`);
-      throw fetchError;
-    }
-
-    const samplePairs = existingPairs || [];
-    const randomPairs = samplePairs
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 10);
-
-    const existingPairsText = randomPairs
-      .map(
-        (pair) =>
-          `- ${pair.type} (${pair.source}): ${pair.option_1_value} vs ${pair.option_2_value}`
-      )
-      .join("\n");
-
-    while (remainingCount > 0 && attempts < MAX_ATTEMPTS) {
-      const response = await generatePairsWithOpenAI(
-        type,
-        existingPairsText,
-        allDuplicatePairs,
-        { count: remainingCount }
-      );
-      const event = JSON.parse(response.output_text);
-      const validatedPairs = PairsResponseSchema.parse(event);
-      const transformedPairs = transformPairsForDatabase(validatedPairs.pairs);
-
-      const { insertedPairs, duplicatePairs } = await savePairsToDatabase(
-        transformedPairs
-      );
-
-      // Add all successfully inserted pairs
-      allInsertedPairs = [...allInsertedPairs, ...insertedPairs];
-      allDuplicatePairs = [...allDuplicatePairs, ...duplicatePairs];
-      remainingCount = targetCount - allInsertedPairs.length;
-      attempts++;
-
-      if (remainingCount === 0) {
-        break;
-      }
-    }
-
-    // Ensure we have exactly the target count by taking the first targetCount pairs
-    const finalPairs = allInsertedPairs.slice(0, targetCount);
+    const { pairs, duplicates, attempts } = await generatePairs(type, count);
 
     res.json({
-      inserted: finalPairs,
-      duplicates: allDuplicatePairs,
+      inserted: pairs,
+      duplicates,
       attempts,
-      message: `Successfully inserted ${finalPairs.length} new pairs after ${attempts} attempt(s), found ${allDuplicatePairs.length} duplicates`
+      message: `Successfully inserted ${pairs.length} new pairs after ${attempts} attempt(s), found ${duplicates.length} duplicates`
     });
   } catch (error) {
     console.error(`Error: ${error.message}`);
@@ -445,7 +506,6 @@ router.get("/get-all-pair-ids", async (req, res) => {
 // Add images to pairs endpoint
 router.get("/add-images", async (req, res) => {
   try {
-    // Get all pairs without images
     const { data: pairsWithoutImages, error: fetchError } = await supabase
       .from("pairs")
       .select("*")
@@ -459,121 +519,41 @@ router.get("/add-images", async (req, res) => {
       return res.json({ message: "No pairs without images found" });
     }
 
-    const results = [];
-    const rowsToDelete = [];
-
-    for (const pair of pairsWithoutImages) {
-      try {
-        const updates = {};
-        let foundImage1 = false;
-        let foundImage2 = false;
-
-        if (!pair.option_1_url) {
-          const url = await getUrlForSource(
-            pair.source,
-            pair.option_1_value,
-            pair.type
-          );
-          if (url) {
-            const processedImage = await processImage(url, pair.source);
-            if (processedImage) {
-              const extension = url.toLowerCase().endsWith(".png")
-                ? ".png"
-                : ".jpg";
-              const filename = `${String(pair.id).padStart(
-                5,
-                "0"
-              )}_1${extension}`;
-              const storedUrl = await uploadToSupabase(
-                processedImage,
-                filename
-              );
-              if (storedUrl) {
-                updates.option_1_url = storedUrl;
-                foundImage1 = true;
-              }
-            }
-          }
-        } else {
-          foundImage1 = true;
-        }
-
-        if (!pair.option_2_url) {
-          const url = await getUrlForSource(
-            pair.source,
-            pair.option_2_value,
-            pair.type
-          );
-          if (url) {
-            const processedImage = await processImage(url, pair.source);
-            if (processedImage) {
-              const extension = url.toLowerCase().endsWith(".png")
-                ? ".png"
-                : ".jpg";
-              const filename = `${String(pair.id).padStart(
-                5,
-                "0"
-              )}_2${extension}`;
-              const storedUrl = await uploadToSupabase(
-                processedImage,
-                filename
-              );
-              if (storedUrl) {
-                updates.option_2_url = storedUrl;
-                foundImage2 = true;
-              }
-            }
-          }
-        } else {
-          foundImage2 = true;
-        }
-
-        if (Object.keys(updates).length > 0) {
-          const { error: updateError } = await supabase
-            .from("pairs")
-            .update(updates)
-            .eq("id", pair.id);
-
-          if (updateError) {
-            results.push({ id: pair.id, error: updateError.message });
-          } else {
-            results.push({ id: pair.id, updates });
-          }
-        }
-
-        if (!foundImage1 || !foundImage2) {
-          rowsToDelete.push(pair.id);
-        }
-      } catch (error) {
-        console.error(`Error processing pair ${pair.id}: ${error.message}`);
-        results.push({ id: pair.id, error: error.message });
-        rowsToDelete.push(pair.id);
-      }
-    }
-
-    if (rowsToDelete.length > 0) {
-      const { error: deleteError } = await supabase
-        .from("pairs")
-        .delete()
-        .in("id", rowsToDelete);
-
-      if (deleteError) {
-        console.error(`Error deleting rows: ${deleteError.message}`);
-      }
-    }
+    const imageResults = await addImagesToPairs(pairsWithoutImages);
 
     res.json({
       message: `Processed ${pairsWithoutImages.length} pairs`,
-      updated: results.filter((r) => !r.error).length,
-      deleted: rowsToDelete.length,
-      details: {
-        results,
-        deleted: rowsToDelete
-      }
+      ...imageResults
     });
   } catch (error) {
     console.error("Error adding images:", error);
     res.status(500).json({ error: "Failed to add images" });
+  }
+});
+
+// Generate pairs and add images endpoint
+router.get("/generate-pairs-with-images", async (req, res) => {
+  try {
+    const { count = 10 } = req.query;
+    const { pairs, duplicates, attempts } = await generatePairs(null, count);
+    const imageResults = await addImagesToPairs(pairs);
+
+    res.json({
+      message: `Generated and processed ${pairs.length} pairs`,
+      inserted: pairs.length,
+      duplicates: duplicates.length,
+      attempts,
+      imageResults
+    });
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    if (error instanceof z.ZodError) {
+      res
+        .status(400)
+        .json({ error: "Invalid response format", details: error.errors });
+    } else {
+      res.status(500).json({ error: "Failed to generate pairs with images" });
+    }
   }
 });
 
